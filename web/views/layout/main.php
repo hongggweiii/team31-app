@@ -34,19 +34,35 @@
 </head>
 <body class="font-sans text-ink antialiased">
 
+<?php
+/**
+ * Site navigation. Value is the route to link to, or null while the page
+ * does not exist yet (rendered as a "#" placeholder).
+ */
+$navLinks = [
+    'Post a Job'      => 'create-gig',
+    'Available Jobs'  => null,
+    'Sell Your Skill' => 'create-profile',
+    'About Us'        => null,
+    'Blog'            => null,
+    'Contact Us'      => null,
+];
+$href = static fn (?string $route): string => $route === null ? '#' : base_url($route);
+?>
+
 <!-- ─────────────────────────────────────────────── header -->
 <header class="sticky top-0 z-40 bg-white border-b border-navy/10">
   <nav class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
     <div class="flex h-16 items-center justify-between gap-4">
 
-      <a href="#" class="text-xl font-extrabold tracking-tight text-navy shrink-0">
+      <a href="<?= base_url() ?>" class="text-xl font-extrabold tracking-tight text-navy shrink-0">
         Sensei<span class="text-brand">Gigs</span>
       </a>
 
       <ul class="hidden lg:flex items-center gap-7">
-        <?php foreach (['Post a Job', 'Available Jobs', 'Sell Your Skill', 'About Us', 'Blog', 'Contact Us'] as $item): ?>
+        <?php foreach ($navLinks as $item => $route): ?>
           <li>
-            <a href="#" class="text-sm font-medium text-ink hover:text-brand transition-colors">
+            <a href="<?= $href($route) ?>" class="text-sm font-medium text-ink hover:text-brand transition-colors">
               <?= esc($item) ?>
             </a>
           </li>
@@ -68,8 +84,8 @@
           </svg>
         </summary>
         <div class="absolute right-0 mt-2 w-56 rounded-card border border-navy/10 bg-white p-2 shadow-lg">
-          <?php foreach (['Post a Job', 'Available Jobs', 'Sell Your Skill', 'About Us', 'Blog', 'Contact Us', 'Login'] as $item): ?>
-            <a href="#" class="block rounded-lg px-3 py-2 text-sm font-medium text-ink hover:bg-cream-25 hover:text-brand">
+          <?php foreach ($navLinks + ['Login' => null] as $item => $route): ?>
+            <a href="<?= $href($route) ?>" class="block rounded-lg px-3 py-2 text-sm font-medium text-ink hover:bg-cream-25 hover:text-brand">
               <?= esc($item) ?>
             </a>
           <?php endforeach; ?>
@@ -100,16 +116,28 @@
 
       <?php
       $columns = [
-          'For Providers' => ['Sell Your Skill', 'Create your Profile', 'Available Jobs'],
-          'For Hirers'    => ['Post a Job', 'Find an Expert', 'Browse Categories'],
-          'Resources'     => ['About Us', 'Blog', 'Contact Us'],
+          'For Providers' => [
+              'Sell Your Skill'     => 'create-profile',
+              'Create your Profile' => 'create-profile',
+              'Available Jobs'      => null,
+          ],
+          'For Hirers' => [
+              'Post a Job'        => 'create-gig',
+              'Find an Expert'    => null,
+              'Browse Categories' => null,
+          ],
+          'Resources' => [
+              'About Us'   => null,
+              'Blog'       => null,
+              'Contact Us' => null,
+          ],
       ];
       foreach ($columns as $heading => $links): ?>
         <div>
           <h3 class="text-xs font-bold uppercase tracking-wider text-white"><?= esc($heading) ?></h3>
           <ul class="mt-4 space-y-2.5">
-            <?php foreach ($links as $link): ?>
-              <li><a href="#" class="text-sm hover:text-brand transition-colors"><?= esc($link) ?></a></li>
+            <?php foreach ($links as $link => $route): ?>
+              <li><a href="<?= $href($route) ?>" class="text-sm hover:text-brand transition-colors"><?= esc($link) ?></a></li>
             <?php endforeach; ?>
           </ul>
         </div>
