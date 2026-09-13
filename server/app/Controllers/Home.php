@@ -8,4 +8,14 @@ class Home extends BaseController
     {
         return view('home');
     }
+
+    public function createProfile(): string
+    {
+        return view('create-profile');
+    }
+
+    public function createGig(): string
+    {
+        return view('create-gig');
+    }
 }
