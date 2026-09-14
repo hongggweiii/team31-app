@@ -49,6 +49,7 @@ $faqs = [
           <a href="#categories" class="rounded-full bg-brand px-7 py-3.5 text-sm font-semibold text-white hover:bg-brand-hover transition-colors">
             Find an Expert
           </a>
+          <a href="<?= base_url('create-gig') ?>" class="rounded-full border-2 border-navy px-7 py-3.5 text-sm font-semibold text-navy hover:bg-navy hover:text-white transition-colors">
           <a href="#" class="rounded-full border-2 border-navy px-7 py-3.5 text-sm font-semibold text-navy hover:bg-navy hover:text-white transition-colors">
             Post a Job
           </a>
@@ -170,6 +171,7 @@ $faqs = [
         nothing until a gig completes.
       </p>
     </div>
+    <a href="<?= base_url('create-profile') ?>" class="rounded-full bg-brand px-7 py-3.5 text-sm font-semibold text-white hover:bg-brand-hover transition-colors">
     <a href="#" class="rounded-full bg-brand px-7 py-3.5 text-sm font-semibold text-white hover:bg-brand-hover transition-colors">
       Create your Profile
     </a>
