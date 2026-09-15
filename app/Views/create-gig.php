@@ -4,26 +4,7 @@
 <?php
 require __DIR__ . '/partials/form-styles.php';
 
-$categories = [
-    'Consultants (General)', 'Industry Experts', 'Accounting & Administrative',
-    'Legal Assistance', 'Training & Education', 'Music, Dance, Performances',
-    'Writing & Translation', 'Asset Management', 'Corporate & Administrative',
-    'Financial', 'Human Resources', 'Industrial & Consumer Design',
-    'Information Technology', 'Logistics & Procurement',
-    'Marketing & Communication', 'Strategy',
-];
-
-$specialisations = [
-    'Mergers & Acquisitions', 'Corporate Finance', 'Financial Due Diligence',
-    'Interim CFO', 'Audit & Assurance', 'Tax Advisory', 'Treasury & Cash Management',
-    'Anti-Money Laundering', 'Regulatory Compliance', 'Risk Management',
-    'Internal Controls', 'Business Valuation', 'Restructuring & Turnaround',
-    'Supply Chain Optimisation', 'Procurement Strategy', 'Process Improvement',
-    'Change Management', 'Organisational Design', 'Talent Acquisition',
-    'Compensation & Benefits', 'Learning & Development', 'Brand Strategy',
-    'Digital Marketing', 'Market Research', 'Product Management',
-    'Data Analytics', 'Cloud Architecture', 'Cybersecurity', 'ERP Implementation',
-];
+// $categories and $specialisations are injected by Home::createGig().
 ?>
 
 <div class="bg-cream-25 border-b border-navy/10">

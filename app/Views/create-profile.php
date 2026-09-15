@@ -4,11 +4,7 @@
 <?php
 require __DIR__ . '/partials/form-styles.php';
 
-$categories = [
-    'Consultants (General)', 'Industry Experts', 'Accounting & Administrative',
-    'Legal Assistance', 'Training & Education', 'Music, Dance, Performances',
-    'Writing & Translation',
-];
+// $categories is injected by Home::createProfile().
 
 $languages = ['English', 'Mandarin', 'Malay', 'Tamil', 'Cantonese', 'Hindi', 'Japanese', 'Korean', 'Other'];
 
