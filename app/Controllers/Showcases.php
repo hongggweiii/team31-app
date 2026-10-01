@@ -1,0 +1,234 @@
+<?php
+
+namespace App\Controllers;
+
+use App\Libraries\RichText;
+use App\Models\CategoryModel;
+use App\Models\ShowcaseModel;
+use App\Models\SpecialityModel;
+use CodeIgniter\HTTP\RedirectResponse;
+
+/**
+ * Providers create showcases here; the route is behind Shield's session filter.
+ */
+class Showcases extends BaseController
+{
+    /** Quill fields; cleaned before validation so an empty editor counts as blank. */
+    private const RICH_TEXT_FIELDS = ['credentials', 'about', 'availability', 'rate', 'how_i_work'];
+
+    private const DOCUMENT_EXTENSIONS = 'pdf,doc,docx,ppt,pptx,jpg,jpeg,png';
+
+    private const MAX_SKILL_LENGTH = 50;
+
+    public function new(): string
+    {
+        return view('create-profile', [
+            'categoryGroups'     => (new CategoryModel())->activeByService(),
+            'specialisations'    => (new SpecialityModel())->activeByCategory(),
+            'documentCategories' => ShowcaseModel::DOCUMENT_CATEGORIES,
+        ]);
+    }
+
+    public function create(): RedirectResponse
+    {
+        $data = $this->normalise($this->request->getPost());
+
+        $categoryIds        = array_keys((new CategoryModel())->activeOptions());
+        $specialityCategory = (new SpecialityModel())->activeCategoryMap();
+
+        $rules = [
+            'name'              => ['label' => 'Name', 'rules' => 'required|max_length[150]'],
+            'title'             => ['label' => 'Title', 'rules' => 'required|max_length[255]'],
+            'credentials'       => ['label' => 'Credentials', 'rules' => 'permit_empty'],
+            'headline'          => ['label' => 'Headline', 'rules' => 'required|max_length[255]'],
+            'about'             => ['label' => 'Bio', 'rules' => 'required'],
+            'categories'        => ['label' => 'Category', 'rules' => 'required|is_array'],
+            'categories.*'      => ['label' => 'Category', 'rules' => 'in_list[' . implode(',', $categoryIds) . ']'],
+            'specialisations'   => ['label' => 'Specialisation', 'rules' => 'required|is_array'],
+            'specialisations.*' => ['label' => 'Specialisation', 'rules' => 'in_list[' . implode(',', array_keys($specialityCategory)) . ']'],
+            'availability'      => ['label' => 'Availability', 'rules' => 'permit_empty'],
+            'rate'              => ['label' => 'Rate', 'rules' => 'permit_empty'],
+            'services'          => ['label' => 'Services I offer', 'rules' => 'required|is_array'],
+            'services.*.title'  => ['label' => 'Service Title', 'rules' => 'required|max_length[255]'],
+            'skill_groups.*.name' => ['label' => 'Technical proficiency category', 'rules' => 'required|max_length[100]'],
+            'how_i_work'        => ['label' => 'How I Work', 'rules' => 'permit_empty'],
+            'terms'             => ['label' => 'Terms of Service', 'rules' => 'required', 'errors' => ['required' => 'Please accept the Terms of Service.']],
+        ];
+
+        // Uploads are optional; the file rules fail on a missing file, so only
+        // apply them to inputs where something was actually chosen.
+        if ($this->chosen('photo')) {
+            $rules['photo'] = [
+                'label' => 'Photo',
+                'rules' => 'uploaded[photo]|is_image[photo]|ext_in[photo,jpg,jpeg,png,webp]|max_size[photo,4096]|min_dims[photo,325,325]',
+            ];
+        }
+        foreach (ShowcaseModel::DOCUMENT_CATEGORIES as $key => $label) {
+            if ($this->chosen("links.{$key}")) {
+                $rules["links.{$key}"] = [
+                    'label' => $label,
+                    'rules' => "uploaded[links.{$key}]|max_size[links.{$key},4096]|ext_in[links.{$key}," . self::DOCUMENT_EXTENSIONS . ']',
+                ];
+            }
+        }
+
+        if (! $this->validateData($data, $rules)) {
+            return redirect()->back()->withInput();
+        }
+
+        // Cross-field checks the rule syntax can't express.
+        $errors = [];
+        $parents = array_map(static fn ($id): string => (string) $specialityCategory[$id], $data['specialisations']);
+        if (array_diff($parents, $data['categories']) !== []) {
+            $errors['specialisations'] = 'Each specialisation must belong to one of the chosen categories.';
+        }
+        foreach ($data['skill_groups'] as $i => $group) {
+            if ($group['skills'] === []) {
+                $errors["skill_groups.{$i}.skills"] = 'Add at least one skill to "' . $group['name'] . '".';
+            } elseif (max(array_map('mb_strlen', $group['skills'])) > self::MAX_SKILL_LENGTH) {
+                $errors["skill_groups.{$i}.skills"] = 'Skills can be at most ' . self::MAX_SKILL_LENGTH . ' characters.';
+            }
+        }
+        if ($errors !== []) {
+            return redirect()->back()->withInput()->with('errors', $errors);
+        }
+
+        $stored = [];
+        $photo  = isset($rules['photo']) ? $this->request->getFile('photo') : null;
+        if ($photo !== null && $photo->isValid() && ! $photo->hasMoved()) {
+            $stored['photo'] = $photo->store('showcases/photos');
+        }
+
+        $documents = [];
+        foreach (array_keys(ShowcaseModel::DOCUMENT_CATEGORIES) as $key) {
+            if (! isset($rules["links.{$key}"])) {
+                continue;
+            }
+            foreach ($this->request->getFileMultiple("links.{$key}") ?? [] as $file) {
+                if ($file->isValid() && ! $file->hasMoved()) {
+                    $documents[] = [
+                        'category'      => $key,
+                        'original_name' => mb_substr($file->getClientName(), 0, 255),
+                        'path'          => $stored[] = $file->store('showcases/documents'),
+                    ];
+                }
+            }
+        }
+
+        $nullIfBlank = static fn (string $value): ?string => $value !== '' ? $value : null;
+
+        $showcases  = new ShowcaseModel();
+        $showcaseId = $showcases->createWithChildren(
+            [
+                'user_id'      => auth()->id(),
+                'name'         => $data['name'],
+                'photo_path'   => $stored['photo'] ?? null,
+                'title'        => $data['title'],
+                'credentials'  => $nullIfBlank($data['credentials']),
+                'headline'     => $data['headline'],
+                'about'        => $data['about'],
+                'availability' => $nullIfBlank($data['availability']),
+                'rate'         => $nullIfBlank($data['rate']),
+                'how_i_work'   => $nullIfBlank($data['how_i_work']),
+            ],
+            [
+                'categories'   => array_map('intval', $data['categories']),
+                'specialities' => array_map('intval', $data['specialisations']),
+                'services'     => array_map(static fn (array $s): array => [
+                    'title'       => $s['title'],
+                    'description' => $nullIfBlank($s['detail']),
+                ], $data['services']),
+                'achievements' => $data['achievements'],
+                'skill_groups' => $data['skill_groups'],
+                'documents'    => $documents,
+            ]
+        );
+
+        if ($showcaseId === false) {
+            foreach ($stored as $path) {
+                @unlink(WRITEPATH . 'uploads/' . $path);
+            }
+
+            return redirect()->back()->withInput()
+                ->with('errors', $showcases->errors() ?: ['showcase' => 'Your showcase could not be saved. Please try again.']);
+        }
+
+        return redirect()->to(url_to('showcase-new'))->with('message', 'Your showcase has been published.');
+    }
+
+    /**
+     * Trims text, cleans rich text, de-duplicates selections and drops empty
+     * repeatable boxes, so validation sees what would actually be saved.
+     */
+    private function normalise(array $post): array
+    {
+        $data = $post;
+        foreach (['name', 'title', 'headline'] as $field) {
+            $data[$field] = trim((string) ($post[$field] ?? ''));
+        }
+        foreach (self::RICH_TEXT_FIELDS as $field) {
+            $data[$field] = RichText::clean($post[$field] ?? '');
+        }
+        foreach (['categories', 'specialisations'] as $field) {
+            $data[$field] = array_values(array_unique(array_map('strval', array_filter((array) ($post[$field] ?? []), 'is_scalar'))));
+        }
+
+        $boxes = static fn (string $field): array => array_values(array_filter((array) ($post[$field] ?? []), 'is_array'));
+
+        $data['services'] = array_map(static fn (array $s): array => [
+            'title'  => trim((string) ($s['title'] ?? '')),
+            'detail' => RichText::clean($s['detail'] ?? ''),
+        ], $boxes('services'));
+
+        $data['achievements'] = array_values(array_filter(array_map(
+            static fn ($a): string => is_string($a) ? RichText::clean($a) : '',
+            (array) ($post['achievements'] ?? [])
+        )));
+
+        $groups = [];
+        foreach ($boxes('skill_groups') as $group) {
+            $name   = trim((string) ($group['name'] ?? ''));
+            $skills = $this->uniqueStrings((array) ($group['skills'] ?? []));
+            if ($name !== '' || $skills !== []) {
+                $groups[] = ['name' => $name, 'skills' => $skills];
+            }
+        }
+        $data['skill_groups'] = $groups;
+
+        return $data;
+    }
+
+    /**
+     * Trimmed, non-empty strings, de-duplicated case-insensitively.
+     *
+     * @return list<string>
+     */
+    private function uniqueStrings(array $values): array
+    {
+        $unique = [];
+        foreach ($values as $value) {
+            $value = is_string($value) ? trim($value) : '';
+            if ($value !== '' && ! isset($unique[mb_strtolower($value)])) {
+                $unique[mb_strtolower($value)] = $value;
+            }
+        }
+
+        return array_values($unique);
+    }
+
+    /**
+     * Whether the user picked at least one file for this input.
+     */
+    private function chosen(string $name): bool
+    {
+        $files = $this->request->getFileMultiple($name) ?? [$this->request->getFile($name)];
+
+        foreach ($files as $file) {
+            if ($file !== null && $file->getError() !== UPLOAD_ERR_NO_FILE) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}

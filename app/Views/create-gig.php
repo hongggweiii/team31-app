@@ -4,7 +4,21 @@
 <?php
 require __DIR__ . '/partials/form-styles.php';
 
-// $categories and $specialisations are injected by Home::createGig().
+helper('form');
+
+// $categoryGroups ([service => [id => name]]) and $specialisations
+// ([category_id => [id => name]]) are injected by Gigs::new().
+$errors = array_merge(validation_errors(), (array) session('errors'));
+// Shows the error for $field, or for any of its array items (e.g. "categories.3").
+$err = static function (string $field) use ($errors): string {
+    foreach ($errors as $key => $message) {
+        if ($key === $field || str_starts_with($key, $field . '.')) {
+            return '<p class="mt-1.5 text-xs font-semibold text-red-600">' . esc($message) . '</p>';
+        }
+    }
+
+    return '';
+};
 ?>
 
 <div class="bg-cream-25 border-b border-navy/10">
@@ -18,7 +32,20 @@ require __DIR__ . '/partials/form-styles.php';
   </div>
 </div>
 
-<form action="#" method="post" class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-12 space-y-8">
+<form action="<?= url_to('gig-create') ?>" method="post"
+      class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-12 space-y-8">
+  <?= csrf_field() ?>
+
+  <?php if (session('message')): ?>
+    <div class="rounded-card border border-green-600/20 bg-green-50 px-6 py-4 text-sm font-semibold text-green-800" role="status">
+      <?= esc(session('message')) ?>
+    </div>
+  <?php elseif ($errors !== []): ?>
+    <div class="rounded-card border border-red-600/20 bg-red-50 px-6 py-4 text-sm text-red-700" role="alert">
+      <p class="font-semibold">Please fix the highlighted fields.</p>
+      <?php if (isset($errors['gig'])): ?><p class="mt-1"><?= esc($errors['gig']) ?></p><?php endif; ?>
+    </div>
+  <?php endif; ?>
 
   <!-- ── listing details ────────────────────────────── -->
   <section class="<?= $cardCls ?>">
@@ -27,71 +54,24 @@ require __DIR__ . '/partials/form-styles.php';
     <div class="mt-6 space-y-5">
       <div>
         <label for="gig_title" class="<?= $labelCls ?>">Gig Title <?= $req ?></label>
-        <input type="text" id="gig_title" name="gig_title" required
+        <input type="text" id="gig_title" name="gig_title" required maxlength="500"
+               value="<?= esc(old('gig_title', '')) ?>"
                placeholder="e.g. Interim CFO for a pre-Series B fintech" class="<?= $inputCls ?>">
+        <?= $err('gig_title') ?>
       </div>
 
       <div>
         <label for="gig_summary" class="<?= $labelCls ?>">Short Gig Description <?= $req ?></label>
         <textarea id="gig_summary" name="gig_summary" rows="4" required
-                  placeholder="Summarise the engagement in a few sentences." class="<?= $inputCls ?>"></textarea>
-        <p class="<?= $hintCls ?>">This is what Hirers see in search results.</p>
-      </div>
-
-      <div>
-        <label for="gig_document" class="<?= $labelCls ?>">Upload Description</label>
-        <input type="file" id="gig_document" name="gig_document" accept=".pdf,.doc,.docx"
-               class="<?= $inputCls ?> file:mr-4 file:rounded-full file:border-0 file:bg-cream-50 file:px-4 file:py-1.5 file:text-sm file:font-semibold file:text-navy">
-        <p class="<?= $hintCls ?>">Optional brief or scope document. PDF or Word, maximum 4MB.</p>
-      </div>
-
-      <div>
-        <label for="gig_notes" class="<?= $labelCls ?>">
-          Additional Notes <span class="font-normal text-ink/45">(optional)</span>
-        </label>
-        <textarea id="gig_notes" name="gig_notes" rows="3"
-                  placeholder="Budget range, start date, or anything else worth knowing." class="<?= $inputCls ?>"></textarea>
+                  placeholder="Summarise the engagement in a few sentences." class="<?= $inputCls ?>"><?= esc(old('gig_summary', '')) ?></textarea>
+        <?= $err('gig_summary') ?>
+        <p class="<?= $hintCls ?>">This is what Providers see in search results.</p>
       </div>
     </div>
   </section>
 
-  <!-- ── category and specialisation ────────────────── -->
-  <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">Category &amp; Specialisation</h2>
-    <p class="mt-2 text-sm text-ink/60">Search and select as many as apply.</p>
-
-    <div class="mt-6 grid gap-6 lg:grid-cols-2">
-
-      <?php foreach ([
-          ['category',       'Search by Category',       'categories',      $categories],
-          ['specialisation', 'Search by Specialisation', 'specialisations', $specialisations],
-      ] as [$key, $label, $field, $options]): ?>
-        <div class="js-multiselect" data-field="<?= esc($field) ?>">
-          <label for="<?= $key ?>_search" class="<?= $labelCls ?>"><?= esc($label) ?> <?= $req ?></label>
-
-          <input type="search" id="<?= $key ?>_search" autocomplete="off"
-                 placeholder="Type to filter&hellip;"
-                 class="<?= $inputCls ?> js-filter">
-
-          <!-- selected items appear here as removable chips -->
-          <div class="js-chips mt-3 flex flex-wrap gap-2 empty:mt-0"></div>
-
-          <div class="js-options mt-3 max-h-56 space-y-1 overflow-y-auto rounded-lg border border-navy/10 p-2">
-            <?php foreach ($options as $option): ?>
-              <label class="js-option flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink hover:bg-cream-25 has-[:checked]:bg-cream-50 has-[:checked]:font-semibold has-[:checked]:text-navy">
-                <input type="checkbox" name="<?= esc($field) ?>[]" value="<?= esc($option) ?>" class="<?= $checkCls ?>">
-                <span class="js-label"><?= esc($option) ?></span>
-              </label>
-            <?php endforeach; ?>
-            <p class="js-empty hidden px-3 py-2 text-sm text-ink/45">No matches.</p>
-          </div>
-
-          <p class="<?= $hintCls ?>"><span class="js-count">0</span> selected</p>
-        </div>
-      <?php endforeach; ?>
-
-    </div>
-  </section>
+  <!-- ── category, specialisations, search tags ─────── -->
+  <?php require __DIR__ . '/partials/taxonomy-picker.php'; ?>
 
   <!-- ── submit ─────────────────────────────────────── -->
   <div class="<?= $cardCls ?>">
@@ -102,63 +82,5 @@ require __DIR__ . '/partials/form-styles.php';
   </div>
 
 </form>
-
-<script>
-/**
- * Searchable multi-select: filters the checkbox list as you type and mirrors
- * every checked option as a removable chip above it.
- */
-document.querySelectorAll('.js-multiselect').forEach(function (root) {
-  var filter  = root.querySelector('.js-filter');
-  var chips   = root.querySelector('.js-chips');
-  var empty   = root.querySelector('.js-empty');
-  var count   = root.querySelector('.js-count');
-  var options = Array.prototype.slice.call(root.querySelectorAll('.js-option'));
-
-  function render() {
-    chips.innerHTML = '';
-    var checked = options.filter(function (o) { return o.querySelector('input').checked; });
-
-    checked.forEach(function (option) {
-      var input = option.querySelector('input');
-      var chip  = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'inline-flex items-center gap-1.5 rounded-full bg-navy px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy-dark transition-colors';
-      chip.textContent = input.value;
-      chip.setAttribute('aria-label', 'Remove ' + input.value);
-      chip.insertAdjacentHTML('beforeend',
-        '<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>');
-      chip.addEventListener('click', function () {
-        input.checked = false;
-        render();
-      });
-      chips.appendChild(chip);
-    });
-
-    count.textContent = checked.length;
-  }
-
-  filter.addEventListener('input', function () {
-    var term = filter.value.trim().toLowerCase();
-    var shown = 0;
-
-    options.forEach(function (option) {
-      var match = option.querySelector('.js-label').textContent.toLowerCase().indexOf(term) !== -1;
-      // NB: a Tailwind display class beats the UA [hidden] rule, so toggle the
-      // .hidden CLASS here — setting the hidden attribute would not hide it.
-      option.classList.toggle('hidden', !match);
-      if (match) shown++;
-    });
-
-    empty.classList.toggle('hidden', shown > 0);
-  });
-
-  root.addEventListener('change', function (event) {
-    if (event.target.matches('input[type="checkbox"]')) render();
-  });
-
-  render();
-});
-</script>
 
 <?= $this->endSection() ?>

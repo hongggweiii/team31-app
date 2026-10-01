@@ -14,11 +14,35 @@ class CategoryModel extends Model
     protected $createdField  = 'created_at';
     protected $updatedField  = 'updated_at';
 
-    public function activeNames(): array
+    /**
+     * Active rows grouped under their service heading (Industry, Function, ...):
+     * [service name => [id => name]], headings in services.id order.
+     */
+    public function activeByService(): array
+    {
+        $grouped = [];
+        $rows    = $this->select('categories.id, categories.name, services.name AS service')
+            ->join('services', 'services.id = categories.service_id')
+            ->where('categories.status', '1')
+            ->orderBy('services.id')
+            ->orderBy('categories.name')
+            ->findAll();
+        foreach ($rows as $row) {
+            $grouped[$row['service']][$row['id']] = $row['name'];
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Active rows as [id => name], for forms that submit ids.
+     */
+    public function activeOptions(): array
     {
         return array_column(
-            $this->select('name')->where('status', '1')->orderBy('name')->findAll(),
-            'name'
+            $this->select('id, name')->where('status', '1')->orderBy('name')->findAll(),
+            'name',
+            'id'
         );
     }
 }

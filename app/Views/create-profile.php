@@ -2,28 +2,74 @@
 <?= $this->section('content') ?>
 
 <?php
+use App\Libraries\RichText;
+
 require __DIR__ . '/partials/form-styles.php';
 
-// $categories is injected by Home::createProfile().
+helper('form');
 
-$languages = ['English', 'Mandarin', 'Malay', 'Tamil', 'Cantonese', 'Hindi', 'Japanese', 'Korean', 'Other'];
+// $categoryGroups ([service => [id => name]]), $specialisations
+// ([category_id => [id => name]]) and $documentCategories are injected by Showcases::new().
+$errors = array_merge(validation_errors(), (array) session('errors'));
+// Shows the error for $field, or for any of its array items (e.g. "services.0.title").
+$err = static function (string $field) use ($errors): string {
+    foreach ($errors as $key => $message) {
+        if ($key === $field || str_starts_with($key, $field . '.')) {
+            return '<p class="mt-1.5 text-xs font-semibold text-red-600">' . esc($message) . '</p>';
+        }
+    }
 
-$locations = [
-    'Virtual Only', 'Anywhere',
-    'Raffles Place, Marina, Cecil', 'Anson, Tanjong Pagar', 'Tiong Bahru, Queenstown',
-    'Telok Blangah, Harbourfront', 'High Street, Beach Road', 'Little India',
-    'Orchard, Cairnhill, River Valley', 'Bukit Timah, Holland Road, Tanglin',
-    'Novena, Thomson', 'Toa Payoh, Serangoon, Balestier',
-];
+    return '';
+};
 
-$days  = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-$slots = ['Morning', 'Afternoon', 'Evening'];
+/**
+ * Rich-text field: a Quill editor that mirrors its HTML into a hidden input
+ * named $name, so the form posts like a normal textarea. $value is cleaned
+ * HTML to start from (e.g. re-filled input after a validation error).
+ */
+$editor = static fn (string $name, string $placeholder, bool $required = false, string $value = ''): string =>
+    '<div class="js-rte" data-placeholder="' . esc($placeholder, 'attr') . '"'
+    . ($required ? ' data-required' : '') . '>'
+    . '<div class="js-rte-body min-h-[7rem] text-sm">' . $value . '</div>'
+    . '<input type="hidden" name="' . esc($name, 'attr') . '" value="' . esc($value, 'attr') . '" class="js-rte-input">'
+    . '</div>';
+$oldRich = static fn (string $name): string => RichText::clean(old($name) ?? '');
+
+$boxes        = static fn (string $field): array => array_values(array_filter((array) (old($field) ?? []), 'is_array'));
+$oldServices  = array_map(static fn (array $s): array => [
+    'title'  => (string) ($s['title'] ?? ''),
+    'detail' => RichText::clean($s['detail'] ?? ''),
+], $boxes('services'));
+$oldAchievements = array_values(array_filter(array_map(
+    static fn ($a): string => is_string($a) ? RichText::clean($a) : '',
+    (array) (old('achievements') ?? [])
+)));
+$oldSkillGroups = array_map(static fn (array $g): array => [
+    'name'   => (string) ($g['name'] ?? ''),
+    'skills' => array_values(array_filter((array) ($g['skills'] ?? []), 'is_string')),
+], $boxes('skill_groups'));
+
+$json = static fn ($value): string => json_encode($value, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+
+$boxCls      = 'rounded-card bg-cream-25 p-5';
+$addBoxCls   = 'flex min-h-[10rem] items-center justify-center rounded-card border-2 border-dashed border-navy/15 hover:border-brand transition';
+$addBtnCls   = 'rounded-full bg-navy px-5 py-2.5 text-sm font-semibold text-white';
+$chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full border border-navy/15 bg-white px-3 py-2 focus-within:border-brand';
 ?>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css">
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+<style>
+  .js-rte .ql-toolbar.ql-snow { border-color: rgb(24 79 126 / .15); border-radius: .5rem .5rem 0 0; background: #fff; }
+  .js-rte .ql-container.ql-snow { border-color: rgb(24 79 126 / .15); border-radius: 0 0 .5rem .5rem; background: #fff; font-family: inherit; }
+  .js-rte .ql-editor { min-height: 7rem; }
+  .js-rte .ql-editor.ql-blank::before { color: rgb(51 51 51 / .4); }
+</style>
 
 <div class="bg-cream-25 border-b border-navy/10">
   <div class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-14">
     <p class="text-xs font-bold uppercase tracking-[0.2em] text-brand">For Providers</p>
-    <h1 class="mt-3 text-3xl font-extrabold tracking-tight text-navy sm:text-4xl">Create your Profile</h1>
+    <h1 class="mt-3 text-3xl font-extrabold tracking-tight text-navy sm:text-4xl">Create your Showcase</h1>
     <p class="mt-4 max-w-2xl leading-relaxed text-ink/70">
       Tell Hirers what you do and how you work. Fields marked
       <span class="font-semibold text-brand">*</span> are required.
@@ -31,237 +77,365 @@ $slots = ['Morning', 'Afternoon', 'Evening'];
   </div>
 </div>
 
-<form action="#" method="post" class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-12 space-y-8">
+<form id="profile_form" action="<?= url_to('showcase-create') ?>" method="post" enctype="multipart/form-data"
+      class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-12 space-y-8">
+  <?= csrf_field() ?>
 
-  <!-- ── personal details ───────────────────────────── -->
+  <?php if (session('message')): ?>
+    <div class="rounded-card border border-green-600/20 bg-green-50 px-6 py-4 text-sm font-semibold text-green-800" role="status">
+      <?= esc(session('message')) ?>
+    </div>
+  <?php elseif ($errors !== []): ?>
+    <div class="rounded-card border border-red-600/20 bg-red-50 px-6 py-4 text-sm text-red-700" role="alert">
+      <p class="font-semibold">Please fix the highlighted fields.</p>
+      <p class="mt-1">For security, any photo or documents you chose need to be attached again.</p>
+      <?php if (isset($errors['showcase'])): ?><p class="mt-1"><?= esc($errors['showcase']) ?></p><?php endif; ?>
+    </div>
+  <?php endif; ?>
+
+  <!-- ── photo, name, title, credentials ────────────── -->
   <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">Personal details</h2>
+    <div class="flex flex-col items-center">
+      <label for="photo" class="relative cursor-pointer" title="Upload photo">
+        <span class="flex h-28 w-28 items-center justify-center overflow-hidden rounded-full border-2 border-navy bg-sky-50">
+          <img id="photo_preview" alt="" class="hidden h-full w-full object-cover">
+          <svg id="photo_placeholder" class="h-16 w-16 text-navy/30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5Z"/>
+          </svg>
+        </span>
+        <span class="absolute -bottom-1 -right-1 flex h-9 w-9 items-center justify-center rounded-full bg-white shadow">
+          <svg class="h-5 w-5 text-ink" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>
+          </svg>
+        </span>
+        <input type="file" id="photo" name="photo" accept="image/jpeg,image/png,image/webp" class="sr-only">
+      </label>
+      <p class="<?= $hintCls ?> text-center">Half length photo, at least 325px, up to 4MB.</p>
+      <?= $err('photo') ?>
 
-    <div class="mt-6 grid gap-5 sm:grid-cols-2">
-      <div>
-        <label for="family_name" class="<?= $labelCls ?>">Family Name <?= $req ?></label>
-        <input type="text" id="family_name" name="family_name" required class="<?= $inputCls ?>">
-      </div>
-      <div>
-        <label for="first_name" class="<?= $labelCls ?>">First Name <?= $req ?></label>
-        <input type="text" id="first_name" name="first_name" required class="<?= $inputCls ?>">
-      </div>
+      <label for="name" class="sr-only">Name</label>
+      <input type="text" id="name" name="name" required maxlength="150"
+             value="<?= esc(old('name', '')) ?>" placeholder="Your name *"
+             class="mt-4 w-full max-w-sm border-0 border-b-2 border-navy/15 bg-transparent text-center text-xl font-semibold text-ink placeholder:text-ink/35 focus:border-brand focus:outline-none focus:ring-0">
+      <?= $err('name') ?>
+    </div>
 
+    <div class="mt-8 space-y-6">
       <div>
-        <label for="mobile" class="<?= $labelCls ?>">Mobile Number <?= $req ?></label>
-        <div class="flex">
-          <span class="inline-flex items-center rounded-l-lg border border-r-0 border-navy/15 bg-cream-25 px-3 text-sm font-medium text-ink/60">+65</span>
-          <input type="tel" id="mobile" name="mobile" required class="<?= $inputCls ?> rounded-l-none">
-        </div>
-      </div>
-      <div>
-        <label for="email" class="<?= $labelCls ?>">Email Address <?= $req ?></label>
-        <input type="email" id="email" name="email" required class="<?= $inputCls ?>">
-      </div>
-
-      <div>
-        <label for="gender" class="<?= $labelCls ?>">Gender <?= $req ?></label>
-        <select id="gender" name="gender" required class="<?= $inputCls ?>">
-          <option value="">Select gender</option>
-          <?php foreach (['Male', 'Female', 'Rather not say'] as $g): ?>
-            <option value="<?= esc($g) ?>"><?= esc($g) ?></option>
-          <?php endforeach; ?>
-        </select>
+        <label for="title" class="<?= $labelCls ?>">Title <?= $req ?></label>
+        <input type="text" id="title" name="title" required maxlength="255"
+               value="<?= esc(old('title', '')) ?>"
+               placeholder="e.g. Financial Due Diligence" class="<?= $inputCls ?>">
+        <?= $err('title') ?>
       </div>
       <div>
-        <label for="birth_month" class="<?= $labelCls ?>">Year of Birth and Month <?= $req ?></label>
-        <input type="month" id="birth_month" name="birth_month" required class="<?= $inputCls ?>">
-      </div>
-
-      <div class="sm:col-span-2">
-        <span class="<?= $labelCls ?>">Preferred Mode of Contact <?= $req ?></span>
-        <div class="flex flex-wrap gap-3">
-          <?php foreach (['Email', 'WhatsApp', 'Any'] as $mode): ?>
-            <label class="<?= $chipCls ?>">
-              <input type="checkbox" name="contact_mode[]" value="<?= esc($mode) ?>" class="<?= $checkCls ?>">
-              <?= esc($mode) ?>
-            </label>
-          <?php endforeach; ?>
-        </div>
-      </div>
-
-      <div class="sm:col-span-2">
-        <label for="address" class="<?= $labelCls ?>">Residential Address</label>
-        <input type="text" id="address" name="address" class="<?= $inputCls ?>">
-      </div>
-
-      <div>
-        <label for="postcode" class="<?= $labelCls ?>">Postcode <?= $req ?></label>
-        <input type="text" id="postcode" name="postcode" required inputmode="numeric" class="<?= $inputCls ?>">
-      </div>
-      <div>
-        <label for="nric" class="<?= $labelCls ?>">NRIC/FIN Number</label>
-        <input type="text" id="nric" name="nric" class="<?= $inputCls ?>">
-      </div>
-
-      <div class="sm:col-span-2">
-        <span class="<?= $labelCls ?>">Residence Status <?= $req ?></span>
-        <div class="flex flex-wrap gap-3">
-          <?php foreach (['Citizen', 'PR'] as $status): ?>
-            <label class="<?= $chipCls ?>">
-              <input type="radio" name="residence_status" value="<?= esc($status) ?>" required class="<?= $radioCls ?>">
-              <?= esc($status) ?>
-            </label>
-          <?php endforeach; ?>
-        </div>
-      </div>
-
-      <div>
-        <label for="language" class="<?= $labelCls ?>">First (main) Language <?= $req ?></label>
-        <select id="language" name="language" required class="<?= $inputCls ?>">
-          <option value="">Select language</option>
-          <?php foreach ($languages as $lang): ?>
-            <option value="<?= esc($lang) ?>"><?= esc($lang) ?></option>
-          <?php endforeach; ?>
-        </select>
-      </div>
-      <div>
-        <label for="other_languages" class="<?= $labelCls ?>">Other Language(s) <?= $req ?></label>
-        <input type="text" id="other_languages" name="other_languages" required
-               placeholder="Separate with commas" class="<?= $inputCls ?>">
+        <span class="<?= $labelCls ?>">Credentials</span>
+        <?= $editor('credentials', 'Educational Degrees, significant Certificates, Professional Admissions, Awards and other relevant credentials', false, $oldRich('credentials')) ?>
       </div>
     </div>
   </section>
 
-  <!-- ── photo ──────────────────────────────────────── -->
+  <!-- ── about ──────────────────────────────────────── -->
   <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">Your photo</h2>
-    <div class="mt-6">
-      <label for="photo" class="<?= $labelCls ?>">Upload Your Photo <?= $req ?></label>
-      <input type="file" id="photo" name="photo" accept="image/*" required
-             class="<?= $inputCls ?> file:mr-4 file:rounded-full file:border-0 file:bg-cream-50 file:px-4 file:py-1.5 file:text-sm file:font-semibold file:text-navy">
-      <p class="<?= $hintCls ?>">Half length profile picture. Minimum resolution 325px, maximum file size 4MB.</p>
+    <h2 class="<?= $sectionCls ?>">About</h2>
+
+    <div class="mt-6 space-y-5">
+      <div>
+        <label for="headline" class="<?= $labelCls ?>">Headline <?= $req ?></label>
+        <input type="text" id="headline" name="headline" required maxlength="255"
+               value="<?= esc(old('headline', '')) ?>"
+               placeholder="e.g. Fractional CFO | Strategy &amp; Finance Expert" class="<?= $inputCls ?>">
+        <?= $err('headline') ?>
+      </div>
+      <div>
+        <span class="<?= $labelCls ?>">Bio <?= $req ?></span>
+        <?= $editor('about', 'Add your bio here...', true, $oldRich('about')) ?>
+        <?= $err('about') ?>
+      </div>
     </div>
   </section>
 
-  <!-- ── service ────────────────────────────────────── -->
-  <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">Your service</h2>
-
-    <div class="mt-6 grid gap-5 sm:grid-cols-2">
-      <div class="sm:col-span-2">
-        <label for="service_category" class="<?= $labelCls ?>">Select a Category for your service <?= $req ?></label>
-        <select id="service_category" name="service_category" required class="<?= $inputCls ?>">
-          <option value="">Please select a category</option>
-          <?php foreach ($categories as $cat): ?>
-            <option value="<?= esc($cat) ?>"><?= esc($cat) ?></option>
-          <?php endforeach; ?>
-        </select>
-      </div>
-
-      <div>
-        <label for="skill" class="<?= $labelCls ?>">Identify your skill for the selected category <?= $req ?></label>
-        <input type="text" id="skill" name="skill" required class="<?= $inputCls ?>">
-      </div>
-      <div>
-        <label for="specialisation" class="<?= $labelCls ?>">Area of specialisation for that skill <?= $req ?></label>
-        <input type="text" id="specialisation" name="specialisation" required class="<?= $inputCls ?>">
-      </div>
-
-      <div>
-        <label for="years" class="<?= $labelCls ?>">Years of Experience <?= $req ?></label>
-        <input type="number" id="years" name="years" min="0" max="70" required class="<?= $inputCls ?>">
-      </div>
-
-      <?php foreach ([
-          ['about', 'About Myself', 'A short introduction Hirers will read first.'],
-          ['services_offered', 'What services I offer?', 'The concrete deliverables you take on.'],
-          ['how_i_work', 'How I work?', 'Your process, availability style, and what clients can expect.'],
-      ] as [$name, $label, $hint]): ?>
-        <div class="sm:col-span-2">
-          <label for="<?= $name ?>" class="<?= $labelCls ?>"><?= esc($label) ?> <?= $req ?></label>
-          <textarea id="<?= $name ?>" name="<?= $name ?>" rows="4" required class="<?= $inputCls ?>"></textarea>
-          <p class="<?= $hintCls ?>"><?= esc($hint) ?></p>
-        </div>
-      <?php endforeach; ?>
-    </div>
-  </section>
+  <!-- ── category, specialisations, search tags ─────── -->
+  <?php require __DIR__ . '/partials/taxonomy-picker.php'; ?>
 
   <!-- ── availability and rate ──────────────────────── -->
   <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">Availability &amp; rate</h2>
-
-    <div class="mt-6 space-y-6">
+    <div class="space-y-6">
       <div>
-        <span class="<?= $labelCls ?>">Your preferred location of work <?= $req ?></span>
-        <div class="flex flex-wrap gap-2.5">
-          <?php foreach ($locations as $loc): ?>
-            <label class="<?= $chipCls ?>">
-              <input type="checkbox" name="locations[]" value="<?= esc($loc) ?>" class="<?= $checkCls ?>">
-              <?= esc($loc) ?>
-            </label>
-          <?php endforeach; ?>
-        </div>
+        <h2 class="<?= $sectionCls ?> mb-3">Availability</h2>
+        <?= $editor('availability', 'State availability. E.g. On holiday from ___ to ___. | Committed on Monday, Wednesday & Friday afternoons? | Generally Available by Appointment', false, $oldRich('availability')) ?>
       </div>
-
       <div>
-        <label for="rate" class="<?= $labelCls ?>">What will you charge for your service <?= $req ?></label>
-        <div class="flex flex-wrap gap-3 sm:flex-nowrap">
-          <div class="flex flex-1 min-w-[10rem]">
-            <span class="inline-flex items-center rounded-l-lg border border-r-0 border-navy/15 bg-cream-25 px-3 text-sm font-medium text-ink/60">S$</span>
-            <input type="number" id="rate" name="rate" min="0" step="0.01" required class="<?= $inputCls ?> rounded-l-none">
-          </div>
-          <select name="rate_unit" required class="<?= $inputCls ?> sm:w-44">
-            <?php foreach (['per Hour', 'per Day', 'per Week', 'per Month', 'per Project', 'per Piece'] as $unit): ?>
-              <option value="<?= esc($unit) ?>"><?= esc($unit) ?></option>
-            <?php endforeach; ?>
-          </select>
-        </div>
-      </div>
-
-      <div>
-        <span class="<?= $labelCls ?>">Available On <?= $req ?></span>
-        <div class="overflow-x-auto">
-          <table class="w-full min-w-[32rem] border-separate border-spacing-1 text-sm">
-            <thead>
-              <tr>
-                <th class="w-20"><span class="sr-only">Day</span></th>
-                <?php foreach ($slots as $slot): ?>
-                  <th class="pb-1 text-xs font-semibold uppercase tracking-wide text-ink/50"><?= esc($slot) ?></th>
-                <?php endforeach; ?>
-              </tr>
-            </thead>
-            <tbody>
-              <?php foreach ($days as $day): ?>
-                <tr>
-                  <th scope="row" class="pr-2 text-left text-sm font-semibold text-navy"><?= esc($day) ?></th>
-                  <?php foreach ($slots as $slot): ?>
-                    <td>
-                      <label class="flex cursor-pointer items-center justify-center rounded-lg border border-navy/15 py-2 hover:border-brand transition has-[:checked]:border-brand has-[:checked]:bg-cream-50">
-                        <input type="checkbox" name="availability[]"
-                               value="<?= esc($day . '-' . $slot) ?>" class="<?= $checkCls ?>">
-                        <span class="sr-only"><?= esc("$day $slot") ?></span>
-                      </label>
-                    </td>
-                  <?php endforeach; ?>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-        </div>
+        <h2 class="<?= $sectionCls ?> mb-3">Rate</h2>
+        <?= $editor('rate', 'E.g. S$250 per hour, or S$5,000 per project', false, $oldRich('rate')) ?>
       </div>
     </div>
+  </section>
+
+  <!-- ── services I offer ───────────────────────────── -->
+  <section class="<?= $cardCls ?>">
+    <h2 class="<?= $sectionCls ?>">Services I offer <?= $req ?></h2>
+    <p class="<?= $hintCls ?>">One service per box.</p>
+    <?= $err('services') ?>
+
+    <div id="services" class="mt-6 grid gap-5 sm:grid-cols-2">
+      <button type="button" class="js-add <?= $addBoxCls ?>"><span class="<?= $addBtnCls ?>">+ Add Another Service</span></button>
+    </div>
+
+    <template id="service_template">
+      <div class="js-box <?= $boxCls ?>">
+        <div class="flex items-start gap-3">
+          <input type="text" name="services[__i__][title]" required maxlength="255"
+                 placeholder="Service Title" class="<?= $inputCls ?>">
+          <button type="button" class="js-remove mt-2 text-ink/50 hover:text-brand" aria-label="Remove service">&times;</button>
+        </div>
+        <div class="mt-3">
+          <?= $editor('services[__i__][detail]', 'Enter detail for this service') ?>
+        </div>
+      </div>
+    </template>
+  </section>
+
+  <!-- ── relevant achievements ──────────────────────── -->
+  <section class="<?= $cardCls ?>">
+    <h2 class="<?= $sectionCls ?>">Relevant achievements</h2>
+    <p class="<?= $hintCls ?>">One achievement per box.</p>
+    <?= $err('achievements') ?>
+
+    <div id="achievements" class="mt-6 space-y-5">
+      <button type="button" class="js-add <?= $addBoxCls ?> w-full"><span class="<?= $addBtnCls ?>">+ Add Another Achievement</span></button>
+    </div>
+
+    <template id="achievement_template">
+      <div class="js-box <?= $boxCls ?> flex items-start gap-3">
+        <div class="flex-1">
+          <?= $editor('achievements[__i__]', 'Add relevant achievement here... (One achievement per box)') ?>
+        </div>
+        <button type="button" class="js-remove mt-2 text-ink/50 hover:text-brand" aria-label="Remove achievement">&times;</button>
+      </div>
+    </template>
+  </section>
+
+  <!-- ── technical proficiency ──────────────────────── -->
+  <section class="<?= $cardCls ?>">
+    <h2 class="<?= $sectionCls ?>">Technical proficiency</h2>
+    <p class="<?= $hintCls ?>">Group your technical skills. Press Enter or comma after each skill.</p>
+    <?= $err('skill_groups') ?>
+
+    <div id="skill_groups" class="mt-6 grid gap-5 sm:grid-cols-2">
+      <button type="button" class="js-add <?= $addBoxCls ?>"><span class="<?= $addBtnCls ?>">+ Add Another Category</span></button>
+    </div>
+
+    <template id="skill_group_template">
+      <div class="js-box <?= $boxCls ?>">
+        <div class="flex items-start gap-3">
+          <input type="text" name="skill_groups[__i__][name]" maxlength="100"
+                 placeholder="Category (e.g. Data &amp; Analytics)" class="<?= $inputCls ?>">
+          <button type="button" class="js-remove mt-2 text-ink/50 hover:text-brand" aria-label="Remove category">&times;</button>
+        </div>
+        <div class="mt-3 <?= $chipBoxCls ?>" data-name="skill_groups[__i__][skills][]">
+          <input type="text" class="js-chip-input min-w-[8rem] flex-1 border-0 bg-transparent p-1 text-sm focus:outline-none focus:ring-0"
+                 placeholder="Add skills (e.g. SAP, Python, Tableau)" maxlength="50">
+        </div>
+      </div>
+    </template>
+  </section>
+
+  <!-- ── how I work ─────────────────────────────────── -->
+  <section class="<?= $cardCls ?>">
+    <h2 class="<?= $sectionCls ?> mb-3">How I work</h2>
+    <?= $editor('how_i_work', 'Describe how you work, e.g. engagement types, availability, travel willingness...', false, $oldRich('how_i_work')) ?>
+  </section>
+
+  <!-- ── links ──────────────────────────────────────── -->
+  <section class="<?= $cardCls ?>">
+    <h2 class="<?= $sectionCls ?>">Links</h2>
+    <p class="<?= $hintCls ?>">Attach documents to each category. Each document can only be linked to one category.
+      PDF, Word, PowerPoint or image files up to 4MB each.</p>
+
+    <ul class="mt-6 divide-y divide-navy/10">
+      <?php foreach ($documentCategories as $key => $label): ?>
+        <li class="py-4">
+          <div class="flex items-center justify-between gap-4">
+            <span class="text-sm font-semibold text-ink"><?= esc($label) ?></span>
+            <label class="cursor-pointer rounded-lg border border-navy px-3 py-1.5 text-sm font-semibold text-navy hover:bg-navy hover:text-white transition">
+              + Attach Document
+              <input type="file" name="links[<?= esc($key) ?>][]" multiple
+                     accept=".pdf,.doc,.docx,.ppt,.pptx,.jpg,.jpeg,.png" class="js-link-file sr-only">
+            </label>
+          </div>
+          <ul class="js-link-files mt-2 space-y-1 text-xs text-ink/60 empty:mt-0"></ul>
+          <?= $err('links.' . $key) ?>
+        </li>
+      <?php endforeach; ?>
+    </ul>
   </section>
 
   <!-- ── submit ─────────────────────────────────────── -->
   <div class="<?= $cardCls ?>">
     <label class="flex items-start gap-3 text-sm text-ink/75">
-      <input type="checkbox" name="terms" required class="<?= $checkCls ?> mt-0.5">
+      <input type="checkbox" name="terms" value="1" required class="<?= $checkCls ?> mt-0.5">
       <span>By submitting this information, you agree to our
         <a href="#" class="font-semibold text-brand hover:underline">Terms of Service</a>.</span>
     </label>
+    <?= $err('terms') ?>
 
     <button type="submit"
             class="mt-6 w-full rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white hover:bg-brand-hover transition-colors sm:w-auto">
-      Submit Profile
+      Publish Showcase
     </button>
   </div>
 
 </form>
+
+<script>
+(function () {
+  var form = document.getElementById('profile_form');
+  var chipCls = 'inline-flex items-center gap-1.5 rounded-full bg-navy px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy-dark transition-colors';
+
+  // Elements with a Tailwind display class need the .hidden class, not [hidden].
+  function show(el, visible) { el.classList.toggle('hidden', !visible); }
+
+  function chip(text, onRemove) {
+    var el = document.createElement('button');
+    el.type = 'button';
+    el.className = chipCls;
+    el.textContent = text;
+    el.setAttribute('aria-label', 'Remove ' + text);
+    el.insertAdjacentHTML('beforeend', '<span aria-hidden="true">&times;</span>');
+    el.addEventListener('click', function () { onRemove(el); });
+    return el;
+  }
+
+  /* ── photo preview ─────────────────────────────── */
+  var photo = document.getElementById('photo');
+  photo.addEventListener('change', function () {
+    var file = photo.files[0];
+    var img  = document.getElementById('photo_preview');
+    if (file) img.src = URL.createObjectURL(file);
+    show(img, !!file);
+    show(document.getElementById('photo_placeholder'), !file);
+  });
+
+  /* ── rich-text editors (Quill) ─────────────────── */
+  var toolbar = [['bold', 'italic', 'underline'], [{ list: 'ordered' }, { list: 'bullet' }], ['clean']];
+
+  function initEditor(root) {
+    var input = root.querySelector('.js-rte-input');
+    var quill = new Quill(root.querySelector('.js-rte-body'), {
+      theme: 'snow',
+      placeholder: root.dataset.placeholder,
+      modules: { toolbar: toolbar },
+    });
+    quill.on('text-change', function () {
+      input.value = quill.getText().trim() === '' ? '' : quill.root.innerHTML;
+    });
+    root.quill = quill;
+  }
+  document.querySelectorAll('.js-rte').forEach(initEditor); // template content isn't matched
+
+  /* ── chip inputs (technical skills) ────────────── */
+  function initChipBox(box, values) {
+    var input = box.querySelector('.js-chip-input');
+
+    function add(text) {
+      text = text.trim();
+      if (!text) return;
+      var exists = Array.prototype.some.call(box.querySelectorAll('input[type=hidden]'), function (i) {
+        return i.value.toLowerCase() === text.toLowerCase();
+      });
+      if (exists) return;
+
+      var el = chip(text, function (c) { c.remove(); });
+      var hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.name = box.dataset.name;
+      hidden.value = text;
+      el.appendChild(hidden);
+      box.insertBefore(el, input);
+    }
+
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        add(input.value);
+        input.value = '';
+      } else if (e.key === 'Backspace' && input.value === '' && input.previousElementSibling) {
+        input.previousElementSibling.remove();
+      }
+    });
+    input.addEventListener('blur', function () { add(input.value); input.value = ''; });
+    (values || []).forEach(add);
+  }
+
+  /* ── repeatable boxes ──────────────────────────── */
+  // Each box comes from a <template>; "__i__" becomes a unique index. At least
+  // one box is always kept. fill(box, value) restores re-filled input.
+  function repeater(containerId, templateId, values, fill) {
+    var container = document.getElementById(containerId);
+    var addBtn    = container.querySelector('.js-add');
+    var tpl       = document.getElementById(templateId);
+    var next      = 0;
+
+    function add(value) {
+      addBtn.insertAdjacentHTML('beforebegin', tpl.innerHTML.replace(/__i__/g, String(next++)));
+      var box = addBtn.previousElementSibling;
+      box.querySelectorAll('.js-rte').forEach(initEditor);
+      fill(box, value);
+      box.querySelector('.js-remove').addEventListener('click', function () {
+        if (container.querySelectorAll('.js-box').length > 1) box.remove();
+      });
+      return box;
+    }
+
+    addBtn.addEventListener('click', function () {
+      var box = add();
+      (box.querySelector('input[type=text]') || box.querySelector('.ql-editor')).focus();
+    });
+    if (values.length) values.forEach(add); else add();
+  }
+
+  // Re-filled rich text was sanitised server-side (RichText::clean).
+  function paste(box, html) {
+    if (html) box.querySelector('.js-rte').quill.clipboard.dangerouslyPasteHTML(html);
+  }
+
+  repeater('services', 'service_template', <?= $json($oldServices) ?>, function (box, s) {
+    if (!s) return;
+    box.querySelector('input[type=text]').value = s.title;
+    paste(box, s.detail);
+  });
+  repeater('achievements', 'achievement_template', <?= $json($oldAchievements) ?>, paste);
+  repeater('skill_groups', 'skill_group_template', <?= $json($oldSkillGroups) ?>, function (box, g) {
+    if (g) box.querySelector('input[type=text]').value = g.name;
+    initChipBox(box.querySelector('.js-chip-box'), g ? g.skills : []);
+  });
+
+  /* ── links: list chosen file names ─────────────── */
+  document.querySelectorAll('.js-link-file').forEach(function (input) {
+    input.addEventListener('change', function () {
+      var list = input.closest('li').querySelector('.js-link-files');
+      list.innerHTML = '';
+      Array.prototype.forEach.call(input.files, function (f) {
+        var li = document.createElement('li');
+        li.textContent = f.name;
+        list.appendChild(li);
+      });
+    });
+  });
+
+  /* ── required rich text (hidden inputs can't use `required`) ── */
+  form.addEventListener('submit', function (e) {
+    var blank = Array.prototype.find.call(form.querySelectorAll('.js-rte[data-required]'), function (root) {
+      return root.querySelector('.js-rte-input').value === '';
+    });
+    if (blank) {
+      e.preventDefault();
+      blank.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      blank.quill.focus();
+    }
+  });
+})();
+</script>
 
 <?= $this->endSection() ?>
