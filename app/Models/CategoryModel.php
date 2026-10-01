@@ -14,11 +14,15 @@ class CategoryModel extends Model
     protected $createdField  = 'created_at';
     protected $updatedField  = 'updated_at';
 
-    public function activeNames(): array
+    /**
+     * Active rows as [id => name], for forms that submit ids.
+     */
+    public function activeOptions(): array
     {
         return array_column(
-            $this->select('name')->where('status', '1')->orderBy('name')->findAll(),
-            'name'
+            $this->select('id, name')->where('status', '1')->orderBy('name')->findAll(),
+            'name',
+            'id'
         );
     }
 }

@@ -14,11 +14,28 @@ class SpecialityModel extends Model
     protected $createdField  = 'created_at';
     protected $updatedField  = 'updated_at';
 
-    public function activeNames(): array
+    /**
+     * Active rows grouped by parent category: [category_id => [id => name]].
+     */
+    public function activeByCategory(): array
+    {
+        $grouped = [];
+        foreach ($this->select('id, name, category_id')->where('status', '1')->orderBy('name')->findAll() as $row) {
+            $grouped[$row['category_id']][$row['id']] = $row['name'];
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Active rows as [id => name], for forms that submit ids.
+     */
+    public function activeOptions(): array
     {
         return array_column(
-            $this->select('name')->where('status', '1')->orderBy('name')->findAll(),
-            'name'
+            $this->select('id, name')->where('status', '1')->orderBy('name')->findAll(),
+            'name',
+            'id'
         );
     }
 }

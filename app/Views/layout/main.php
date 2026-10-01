@@ -48,6 +48,11 @@ $navLinks = [
     'Contact Us'      => null,
 ];
 $href = static fn (?string $route): string => $route === null ? '#' : base_url($route);
+
+// Shield auth routes: [label, route] for the secondary link and the primary button.
+[$authLink, $authButton] = auth()->loggedIn()
+    ? [[auth()->user()->email, null], ['Logout', 'logout']]
+    : [['Login', 'login'], ['Create Account', 'register']];
 ?>
 
 <!-- ─────────────────────────────────────────────── header -->
@@ -70,9 +75,9 @@ $href = static fn (?string $route): string => $route === null ? '#' : base_url($
       </ul>
 
       <div class="hidden lg:flex items-center gap-4 shrink-0">
-        <a href="#" class="text-sm font-semibold text-navy hover:text-brand transition-colors">Login</a>
-        <a href="#" class="rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-hover transition-colors">
-          Create Account
+        <a href="<?= $href($authLink[1]) ?>" class="text-sm font-semibold text-navy hover:text-brand transition-colors"><?= esc($authLink[0]) ?></a>
+        <a href="<?= $href($authButton[1]) ?>" class="rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-hover transition-colors">
+          <?= esc($authButton[0]) ?>
         </a>
       </div>
 
@@ -84,13 +89,13 @@ $href = static fn (?string $route): string => $route === null ? '#' : base_url($
           </svg>
         </summary>
         <div class="absolute right-0 mt-2 w-56 rounded-card border border-navy/10 bg-white p-2 shadow-lg">
-          <?php foreach ($navLinks + ['Login' => null] as $item => $route): ?>
+          <?php foreach ($navLinks + [$authLink[0] => $authLink[1]] as $item => $route): ?>
             <a href="<?= $href($route) ?>" class="block rounded-lg px-3 py-2 text-sm font-medium text-ink hover:bg-cream-25 hover:text-brand">
               <?= esc($item) ?>
             </a>
           <?php endforeach; ?>
-          <a href="#" class="mt-1 block rounded-full bg-brand px-3 py-2 text-center text-sm font-semibold text-white">
-            Create Account
+          <a href="<?= $href($authButton[1]) ?>" class="mt-1 block rounded-full bg-brand px-3 py-2 text-center text-sm font-semibold text-white">
+            <?= esc($authButton[0]) ?>
           </a>
         </div>
       </details>

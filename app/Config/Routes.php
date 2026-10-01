@@ -5,7 +5,11 @@ use CodeIgniter\Router\RouteCollection;
 /** @var RouteCollection $routes */
 $routes->get('/', 'Home::index');
 
-// Forms are not wired to a backend yet, so POST re-renders the page
-// rather than returning a 404.
-$routes->match(['GET', 'POST'], 'create-profile', 'Home::createProfile');
-$routes->match(['GET', 'POST'], 'create-gig', 'Home::createGig');
+$routes->group('', ['filter' => 'session'], static function (RouteCollection $routes): void {
+    $routes->get('create-gig', 'Gigs::new', ['as' => 'gig-new']);
+    $routes->post('create-gig', 'Gigs::create', ['as' => 'gig-create']);
+    $routes->get('create-profile', 'Showcases::new', ['as' => 'showcase-new']);
+    $routes->post('create-profile', 'Showcases::create', ['as' => 'showcase-create']);
+});
+
+service('auth')->routes($routes);
