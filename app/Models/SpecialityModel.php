@@ -28,6 +28,40 @@ class SpecialityModel extends Model
     }
 
     /**
+     * Active rows as [speciality id => its category id].
+     */
+    public function activeCategoryMap(): array
+    {
+        return array_column(
+            $this->select('id, category_id')->where('status', '1')->findAll(),
+            'category_id',
+            'id'
+        );
+    }
+
+    /**
+     * Search tags for the given specialities: "Specialisation (Category)",
+     * e.g. "Investor Reporting (Asset/Wealth Management)".
+     *
+     * @return list<string>
+     */
+    public function searchTags(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $rows = $this->select('specialities.name, categories.name AS category')
+            ->join('categories', 'categories.id = specialities.category_id')
+            ->whereIn('specialities.id', array_map('intval', $ids))
+            ->orderBy('categories.name')
+            ->orderBy('specialities.name')
+            ->findAll();
+
+        return array_map(static fn (array $row): string => "{$row['name']} ({$row['category']})", $rows);
+    }
+
+    /**
      * Active rows as [id => name], for forms that submit ids.
      */
     public function activeOptions(): array

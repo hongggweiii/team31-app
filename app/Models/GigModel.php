@@ -6,24 +6,17 @@ use CodeIgniter\Model;
 
 class GigModel extends Model
 {
-    /** Stored value => label. Values match the ranker's seniority_fit vocabulary. */
-    public const SENIORITY_LEVELS = ['mid' => 'Mid-level', 'senior' => 'Senior', 'expert' => 'Expert'];
-
     protected $table         = 'gigs';
     protected $primaryKey    = 'id';
     protected $returnType    = 'array';
-    protected $allowedFields = ['user_id', 'title', 'summary', 'notes', 'document_path', 'budget_min', 'budget_max', 'seniority', 'start_date', 'status'];
+    protected $allowedFields = ['user_id', 'title', 'summary', 'status'];
     protected $useTimestamps = true;
     protected $createdField  = 'created_at';
     protected $updatedField  = 'updated_at';
 
     protected $validationRules = [
-        'title'      => 'required|max_length[500]',
-        'summary'    => 'required',
-        'budget_min' => 'permit_empty|decimal|greater_than_equal_to[0]',
-        'budget_max' => 'permit_empty|decimal|greater_than_equal_to[0]',
-        'seniority'  => 'required|in_list[mid,senior,expert]',
-        'start_date' => 'permit_empty|valid_date[Y-m-d]',
+        'title'   => 'required|max_length[500]',
+        'summary' => 'required',
     ];
 
     /**

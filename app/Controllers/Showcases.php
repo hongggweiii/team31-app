@@ -4,7 +4,6 @@ namespace App\Controllers;
 
 use App\Libraries\RichText;
 use App\Models\CategoryModel;
-use App\Models\GigModel;
 use App\Models\ShowcaseModel;
 use App\Models\SpecialityModel;
 use CodeIgniter\HTTP\RedirectResponse;
@@ -15,62 +14,46 @@ use CodeIgniter\HTTP\RedirectResponse;
 class Showcases extends BaseController
 {
     /** Quill fields; cleaned before validation so an empty editor counts as blank. */
-    private const RICH_TEXT_FIELDS = ['credentials', 'relevant_achievements', 'about', 'how_i_work', 'availability', 'rate_notes'];
+    private const RICH_TEXT_FIELDS = ['credentials', 'about', 'availability', 'rate', 'how_i_work'];
 
     private const DOCUMENT_EXTENSIONS = 'pdf,doc,docx,ppt,pptx,jpg,jpeg,png';
+
+    private const MAX_SKILL_LENGTH = 50;
 
     public function new(): string
     {
         return view('create-profile', [
-            'categories'         => (new CategoryModel())->activeOptions(),
+            'categoryGroups'     => (new CategoryModel())->activeByService(),
             'specialisations'    => (new SpecialityModel())->activeByCategory(),
-            'seniorityLevels'    => GigModel::SENIORITY_LEVELS,
-            'locations'          => ShowcaseModel::LOCATIONS,
             'documentCategories' => ShowcaseModel::DOCUMENT_CATEGORIES,
         ]);
     }
 
     public function create(): RedirectResponse
     {
-        $data = $this->request->getPost();
+        $data = $this->normalise($this->request->getPost());
 
-        foreach (self::RICH_TEXT_FIELDS as $field) {
-            $data[$field] = RichText::clean($data[$field] ?? '');
-        }
-        $data['services'] = array_values(array_map(static fn ($service): array => [
-            'title'  => trim((string) ($service['title'] ?? '')),
-            'detail' => RichText::clean($service['detail'] ?? ''),
-        ], array_filter((array) ($data['services'] ?? []), 'is_array')));
-        $data['search_tags'] = $this->normaliseTags((array) ($data['search_tags'] ?? []));
-
-        $categoryIds     = array_keys((new CategoryModel())->activeOptions());
-        $specialisations = (new SpecialityModel())->activeByCategory()[$data['service_category'] ?? ''] ?? [];
-        $availableNow    = ($data['available_now'] ?? '') === '1';
+        $categoryIds        = array_keys((new CategoryModel())->activeOptions());
+        $specialityCategory = (new SpecialityModel())->activeCategoryMap();
 
         $rules = [
-            'service_category'      => ['label' => 'Category', 'rules' => 'required|in_list[' . implode(',', $categoryIds) . ']'],
-            'title'                 => ['label' => 'Title', 'rules' => 'required|max_length[255]'],
-            'years'                 => ['label' => 'Years of Experience', 'rules' => 'required|is_natural|less_than_equal_to[70]'],
-            'seniority'             => ['label' => 'Seniority', 'rules' => 'required|in_list[' . implode(',', array_keys(GigModel::SENIORITY_LEVELS)) . ']'],
-            'credentials'           => ['label' => 'Credentials', 'rules' => 'required'],
-            'relevant_achievements' => ['label' => 'Relevant Achievements', 'rules' => 'permit_empty'],
-            'headline'              => ['label' => 'Headline', 'rules' => 'required|max_length[255]'],
-            'about'                 => ['label' => 'Bio', 'rules' => 'required'],
-            'services'              => ['label' => 'Services I offer', 'rules' => 'required|is_array'],
-            'services.*.title'      => ['label' => 'Service Title', 'rules' => 'required|max_length[255]'],
-            'how_i_work'            => ['label' => 'How I Work', 'rules' => 'required'],
-            'locations'             => ['label' => 'Preferred location of work', 'rules' => 'required|is_array'],
-            'available_from'        => ['label' => 'Available From', 'rules' => $availableNow ? 'permit_empty' : 'required|valid_date[Y-m-d]'],
-            'capacity'              => ['label' => 'Capacity', 'rules' => 'required|is_natural_no_zero|less_than_equal_to[5]'],
-            'availability'          => ['label' => 'Availability Notes', 'rules' => 'permit_empty'],
-            'rate_per_hour'         => ['label' => 'Rate (per hour)', 'rules' => 'required|is_natural_no_zero|less_than_equal_to[100000]'],
-            'rate_notes'            => ['label' => 'Rate Notes', 'rules' => 'permit_empty'],
-            'search_tags.*'         => ['label' => 'Search Tag', 'rules' => 'max_length[50]'],
-            'terms'                 => ['label' => 'Terms of Service', 'rules' => 'required', 'errors' => ['required' => 'Please accept the Terms of Service.']],
+            'name'              => ['label' => 'Name', 'rules' => 'required|max_length[150]'],
+            'title'             => ['label' => 'Title', 'rules' => 'required|max_length[255]'],
+            'credentials'       => ['label' => 'Credentials', 'rules' => 'permit_empty'],
+            'headline'          => ['label' => 'Headline', 'rules' => 'required|max_length[255]'],
+            'about'             => ['label' => 'Bio', 'rules' => 'required'],
+            'categories'        => ['label' => 'Category', 'rules' => 'required|is_array'],
+            'categories.*'      => ['label' => 'Category', 'rules' => 'in_list[' . implode(',', $categoryIds) . ']'],
+            'specialisations'   => ['label' => 'Specialisation', 'rules' => 'required|is_array'],
+            'specialisations.*' => ['label' => 'Specialisation', 'rules' => 'in_list[' . implode(',', array_keys($specialityCategory)) . ']'],
+            'availability'      => ['label' => 'Availability', 'rules' => 'permit_empty'],
+            'rate'              => ['label' => 'Rate', 'rules' => 'permit_empty'],
+            'services'          => ['label' => 'Services I offer', 'rules' => 'required|is_array'],
+            'services.*.title'  => ['label' => 'Service Title', 'rules' => 'required|max_length[255]'],
+            'skill_groups.*.name' => ['label' => 'Technical proficiency category', 'rules' => 'required|max_length[100]'],
+            'how_i_work'        => ['label' => 'How I Work', 'rules' => 'permit_empty'],
+            'terms'             => ['label' => 'Terms of Service', 'rules' => 'required', 'errors' => ['required' => 'Please accept the Terms of Service.']],
         ];
-        if ($specialisations !== []) {
-            $rules['specialisation'] = ['label' => 'Specialisation', 'rules' => 'required|in_list[' . implode(',', array_keys($specialisations)) . ']'];
-        }
 
         // Uploads are optional; the file rules fail on a missing file, so only
         // apply them to inputs where something was actually chosen.
@@ -93,10 +76,21 @@ class Showcases extends BaseController
             return redirect()->back()->withInput();
         }
 
-        // in_list splits on commas, which the location names contain.
-        if (array_diff((array) $data['locations'], ShowcaseModel::LOCATIONS) !== []) {
-            return redirect()->back()->withInput()
-                ->with('errors', ['locations' => 'Please choose locations from the list.']);
+        // Cross-field checks the rule syntax can't express.
+        $errors = [];
+        $parents = array_map(static fn ($id): string => (string) $specialityCategory[$id], $data['specialisations']);
+        if (array_diff($parents, $data['categories']) !== []) {
+            $errors['specialisations'] = 'Each specialisation must belong to one of the chosen categories.';
+        }
+        foreach ($data['skill_groups'] as $i => $group) {
+            if ($group['skills'] === []) {
+                $errors["skill_groups.{$i}.skills"] = 'Add at least one skill to "' . $group['name'] . '".';
+            } elseif (max(array_map('mb_strlen', $group['skills'])) > self::MAX_SKILL_LENGTH) {
+                $errors["skill_groups.{$i}.skills"] = 'Skills can be at most ' . self::MAX_SKILL_LENGTH . ' characters.';
+            }
+        }
+        if ($errors !== []) {
+            return redirect()->back()->withInput()->with('errors', $errors);
         }
 
         $stored = [];
@@ -106,7 +100,7 @@ class Showcases extends BaseController
         }
 
         $documents = [];
-        foreach (ShowcaseModel::DOCUMENT_CATEGORIES as $key => $label) {
+        foreach (array_keys(ShowcaseModel::DOCUMENT_CATEGORIES) as $key) {
             if (! isset($rules["links.{$key}"])) {
                 continue;
             }
@@ -121,35 +115,33 @@ class Showcases extends BaseController
             }
         }
 
+        $nullIfBlank = static fn (string $value): ?string => $value !== '' ? $value : null;
+
         $showcases  = new ShowcaseModel();
         $showcaseId = $showcases->createWithChildren(
             [
-                'user_id'               => auth()->id(),
-                'category_id'           => (int) $data['service_category'],
-                'speciality_id'         => $specialisations !== [] ? (int) $data['specialisation'] : null,
-                'title'                 => trim($data['title']),
-                'years_experience'      => (int) $data['years'],
-                'seniority'             => $data['seniority'],
-                'credentials'           => $data['credentials'],
-                'relevant_achievements' => $data['relevant_achievements'] !== '' ? $data['relevant_achievements'] : null,
-                'headline'              => trim($data['headline']),
-                'about'                 => $data['about'],
-                'how_i_work'            => $data['how_i_work'],
-                'locations'             => array_values(array_unique($data['locations'])),
-                'available_now'         => $availableNow,
-                'available_from'        => $availableNow ? null : $data['available_from'],
-                'capacity'              => (int) $data['capacity'],
-                'availability_notes'    => $data['availability'] !== '' ? $data['availability'] : null,
-                'rate_per_hour'         => (int) $data['rate_per_hour'],
-                'rate_notes'            => $data['rate_notes'] !== '' ? $data['rate_notes'] : null,
-                'search_tags'           => $data['search_tags'] !== [] ? $data['search_tags'] : null,
-                'photo_path'            => $stored['photo'] ?? null,
+                'user_id'      => auth()->id(),
+                'name'         => $data['name'],
+                'photo_path'   => $stored['photo'] ?? null,
+                'title'        => $data['title'],
+                'credentials'  => $nullIfBlank($data['credentials']),
+                'headline'     => $data['headline'],
+                'about'        => $data['about'],
+                'availability' => $nullIfBlank($data['availability']),
+                'rate'         => $nullIfBlank($data['rate']),
+                'how_i_work'   => $nullIfBlank($data['how_i_work']),
             ],
-            array_map(static fn (array $s): array => [
-                'title'       => $s['title'],
-                'description' => $s['detail'] !== '' ? $s['detail'] : null,
-            ], $data['services']),
-            $documents
+            [
+                'categories'   => array_map('intval', $data['categories']),
+                'specialities' => array_map('intval', $data['specialisations']),
+                'services'     => array_map(static fn (array $s): array => [
+                    'title'       => $s['title'],
+                    'description' => $nullIfBlank($s['detail']),
+                ], $data['services']),
+                'achievements' => $data['achievements'],
+                'skill_groups' => $data['skill_groups'],
+                'documents'    => $documents,
+            ]
         );
 
         if ($showcaseId === false) {
@@ -162,6 +154,66 @@ class Showcases extends BaseController
         }
 
         return redirect()->to(url_to('showcase-new'))->with('message', 'Your showcase has been published.');
+    }
+
+    /**
+     * Trims text, cleans rich text, de-duplicates selections and drops empty
+     * repeatable boxes, so validation sees what would actually be saved.
+     */
+    private function normalise(array $post): array
+    {
+        $data = $post;
+        foreach (['name', 'title', 'headline'] as $field) {
+            $data[$field] = trim((string) ($post[$field] ?? ''));
+        }
+        foreach (self::RICH_TEXT_FIELDS as $field) {
+            $data[$field] = RichText::clean($post[$field] ?? '');
+        }
+        foreach (['categories', 'specialisations'] as $field) {
+            $data[$field] = array_values(array_unique(array_map('strval', array_filter((array) ($post[$field] ?? []), 'is_scalar'))));
+        }
+
+        $boxes = static fn (string $field): array => array_values(array_filter((array) ($post[$field] ?? []), 'is_array'));
+
+        $data['services'] = array_map(static fn (array $s): array => [
+            'title'  => trim((string) ($s['title'] ?? '')),
+            'detail' => RichText::clean($s['detail'] ?? ''),
+        ], $boxes('services'));
+
+        $data['achievements'] = array_values(array_filter(array_map(
+            static fn ($a): string => is_string($a) ? RichText::clean($a) : '',
+            (array) ($post['achievements'] ?? [])
+        )));
+
+        $groups = [];
+        foreach ($boxes('skill_groups') as $group) {
+            $name   = trim((string) ($group['name'] ?? ''));
+            $skills = $this->uniqueStrings((array) ($group['skills'] ?? []));
+            if ($name !== '' || $skills !== []) {
+                $groups[] = ['name' => $name, 'skills' => $skills];
+            }
+        }
+        $data['skill_groups'] = $groups;
+
+        return $data;
+    }
+
+    /**
+     * Trimmed, non-empty strings, de-duplicated case-insensitively.
+     *
+     * @return list<string>
+     */
+    private function uniqueStrings(array $values): array
+    {
+        $unique = [];
+        foreach ($values as $value) {
+            $value = is_string($value) ? trim($value) : '';
+            if ($value !== '' && ! isset($unique[mb_strtolower($value)])) {
+                $unique[mb_strtolower($value)] = $value;
+            }
+        }
+
+        return array_values($unique);
     }
 
     /**
@@ -178,23 +230,5 @@ class Showcases extends BaseController
         }
 
         return false;
-    }
-
-    /**
-     * Trimmed, de-duplicated (case-insensitive) tags, capped at 20.
-     *
-     * @return list<string>
-     */
-    private function normaliseTags(array $tags): array
-    {
-        $unique = [];
-        foreach ($tags as $tag) {
-            $tag = trim((string) $tag);
-            if ($tag !== '' && ! isset($unique[mb_strtolower($tag)])) {
-                $unique[mb_strtolower($tag)] = $tag;
-            }
-        }
-
-        return array_slice(array_values($unique), 0, 20);
     }
 }

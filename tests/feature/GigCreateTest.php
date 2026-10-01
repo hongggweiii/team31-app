@@ -8,7 +8,7 @@ use CodeIgniter\Shield\Test\AuthenticationTesting;
 use CodeIgniter\Test\CIUnitTestCase;
 use CodeIgniter\Test\DatabaseTestTrait;
 use CodeIgniter\Test\FeatureTestTrait;
-use Config\Database;
+use Tests\Support\LegacyTaxonomyTrait;
 
 /**
  * @internal
@@ -18,6 +18,7 @@ final class GigCreateTest extends CIUnitTestCase
     use AuthenticationTesting;
     use DatabaseTestTrait;
     use FeatureTestTrait;
+    use LegacyTaxonomyTrait;
 
     protected $namespace = null; // run App and Shield migrations
     protected $refresh   = true;
@@ -26,22 +27,7 @@ final class GigCreateTest extends CIUnitTestCase
     {
         parent::setUp();
 
-        // The taxonomy tables come from the legacy DB and have no migration.
-        $forge = Database::forge();
-
-        foreach (['categories', 'specialities'] as $table) {
-            $forge->addField([
-                'id'     => ['type' => 'int', 'auto_increment' => true],
-                'name'   => ['type' => 'varchar', 'constraint' => 255],
-                'status' => ['type' => 'varchar', 'constraint' => 1, 'default' => '0'],
-            ]);
-            $forge->addPrimaryKey('id');
-            $forge->createTable($table, true);
-            $this->db->table($table)->insertBatch([
-                ['id' => 1, 'name' => 'Finance', 'status' => '1'],
-                ['id' => 2, 'name' => 'Retired', 'status' => '0'],
-            ]);
-        }
+        $this->createLegacyTaxonomy();
 
         // CSRF is covered by the framework; keep these requests token-free.
         config('Filters')->globals['before'] = [];
@@ -49,9 +35,7 @@ final class GigCreateTest extends CIUnitTestCase
 
     protected function tearDown(): void
     {
-        $forge = Database::forge();
-        $forge->dropTable('categories', true);
-        $forge->dropTable('specialities', true);
+        $this->dropLegacyTaxonomy();
 
         parent::tearDown();
     }
@@ -59,34 +43,34 @@ final class GigCreateTest extends CIUnitTestCase
     private function validInput(): array
     {
         return [
-            'gig_title'       => 'Interim CFO',
+            'gig_title'       => '  Interim CFO ',
             'gig_summary'     => 'Lead finance for six months.',
-            'budget_min'      => '5000',
-            'budget_max'      => '10000',
-            'seniority'       => 'senior',
-            'start_date'      => '2026-11-01',
-            'categories'      => ['1'],
-            'specialisations' => ['1'],
+            'categories'      => ['1', '3'],
+            'specialisations' => ['10', '20'],
         ];
     }
 
     public function testGuestIsRedirectedToLogin(): void
     {
+        // Shield's auth service is shared, so drop any user left by earlier tests.
+        auth()->logout();
+
         $this->get('create-gig')->assertRedirectTo(url_to('login'));
         $this->post('create-gig', $this->validInput())->assertRedirectTo(url_to('login'));
-        $this->dontSeeInDatabase('gigs', ['title' => 'Interim CFO']);
+        $this->seeNumRecords(0, 'gigs', []);
     }
 
     public function testLoggedInUserSeesForm(): void
     {
-        $user = fake(UserModel::class);
-
-        $result = $this->actingAs($user)->get('create-gig');
+        $result = $this->actingAs(fake(UserModel::class))->get('create-gig');
 
         $result->assertOK();
-        $result->assertSee('Seniority Needed');
-        $result->assertSee('Finance');
+        $result->assertSee('Short Gig Description');
+        $result->assertSee('Industry');                // category group heading
+        $result->assertSee('Due Diligence (Finance)'); // specialisation labelled as its search tag
         $result->assertDontSee('Retired');
+        $result->assertDontSee('Seniority');           // ranker-only fields are gone
+        $result->assertDontSee('Budget');
     }
 
     public function testCreatesGigWithTaxonomyLinks(): void
@@ -96,34 +80,47 @@ final class GigCreateTest extends CIUnitTestCase
         $result = $this->actingAs($user)->post('create-gig', $this->validInput());
 
         $result->assertRedirectTo(url_to('gig-new'));
-        $result->assertSessionHas('message');
+        $result->assertSessionHas('message', 'Your gig has been posted.');
 
-        $gig = (new GigModel())->where('title', 'Interim CFO')->first();
-        $this->assertNotNull($gig);
+        $gig = (new GigModel())->first();
         $this->assertSame((string) $user->id, (string) $gig['user_id']);
-        $this->assertSame('senior', $gig['seniority']);
-        $this->assertSame('2026-11-01', $gig['start_date']);
+        $this->assertSame('Interim CFO', $gig['title']);
+        $this->assertSame('Lead finance for six months.', $gig['summary']);
+        $this->assertSame(['id', 'user_id', 'title', 'summary', 'status', 'created_at', 'updated_at'], array_keys($gig));
         $this->seeInDatabase('gig_categories', ['gig_id' => $gig['id'], 'category_id' => 1]);
-        $this->seeInDatabase('gig_specialities', ['gig_id' => $gig['id'], 'speciality_id' => 1]);
+        $this->seeInDatabase('gig_categories', ['gig_id' => $gig['id'], 'category_id' => 3]);
+        $this->seeInDatabase('gig_specialities', ['gig_id' => $gig['id'], 'speciality_id' => 10]);
+        $this->seeInDatabase('gig_specialities', ['gig_id' => $gig['id'], 'speciality_id' => 20]);
     }
 
-    public function testRejectsInvalidInput(): void
+    /**
+     * @dataProvider provideInvalidInput
+     */
+    public function testRejectsInvalidInput(array $override, array $remove = []): void
     {
-        $user = fake(UserModel::class);
-
-        $cases = [
-            'missing title'       => ['gig_title' => ''],
-            'inactive category'   => ['categories' => ['2']],
-            'no specialisation'   => ['specialisations' => null],
-            'bad seniority'       => ['seniority' => 'Wizard'],
-            'budget min over max' => ['budget_min' => '20000'],
-        ];
-
-        foreach ($cases as $name => $override) {
-            $input = array_filter(array_merge($this->validInput(), $override), static fn ($v) => $v !== null);
-
-            $this->actingAs($user)->post('create-gig', $input)->assertRedirect();
-            $this->assertSame(0, $this->db->table('gigs')->countAllResults(), $name);
+        $input = array_merge($this->validInput(), $override);
+        foreach ($remove as $field) {
+            unset($input[$field]);
         }
+
+        $result = $this->actingAs(fake(UserModel::class))->post('create-gig', $input);
+
+        $result->assertRedirect();
+        $result->assertSessionMissing('message');
+        $this->seeNumRecords(0, 'gigs', []);
+    }
+
+    public static function provideInvalidInput(): iterable
+    {
+        return [
+            'missing title'                     => [['gig_title' => '']],
+            'title too long'                    => [['gig_title' => str_repeat('x', 501)]],
+            'missing description'               => [[], ['gig_summary']],
+            'no categories'                     => [[], ['categories']],
+            'inactive category'                 => [['categories' => ['1', '2', '3']]],
+            'no specialisations'                => [[], ['specialisations']],
+            'inactive specialisation'           => [['specialisations' => ['10', '12']]],
+            'specialisation outside categories' => [['categories' => ['1'], 'specialisations' => ['10', '20']]],
+        ];
     }
 }

@@ -8,8 +8,8 @@ require __DIR__ . '/partials/form-styles.php';
 
 helper('form');
 
-// $categories ([id => name]), $specialisations ([category_id => [id => name]]),
-// $seniorityLevels, $locations and $documentCategories are injected by Showcases::new().
+// $categoryGroups ([service => [id => name]]), $specialisations
+// ([category_id => [id => name]]) and $documentCategories are injected by Showcases::new().
 $errors = array_merge(validation_errors(), (array) session('errors'));
 // Shows the error for $field, or for any of its array items (e.g. "services.0.title").
 $err = static function (string $field) use ($errors): string {
@@ -27,7 +27,7 @@ $err = static function (string $field) use ($errors): string {
  * named $name, so the form posts like a normal textarea. $value is cleaned
  * HTML to start from (e.g. re-filled input after a validation error).
  */
-$editor = static fn (string $name, string $placeholder, bool $required = true, string $value = ''): string =>
+$editor = static fn (string $name, string $placeholder, bool $required = false, string $value = ''): string =>
     '<div class="js-rte" data-placeholder="' . esc($placeholder, 'attr') . '"'
     . ($required ? ' data-required' : '') . '>'
     . '<div class="js-rte-body min-h-[7rem] text-sm">' . $value . '</div>'
@@ -35,12 +35,26 @@ $editor = static fn (string $name, string $placeholder, bool $required = true, s
     . '</div>';
 $oldRich = static fn (string $name): string => RichText::clean(old($name) ?? '');
 
-$oldLocations = (array) (old('locations') ?? []);
-$oldServices  = array_values(array_map(static fn ($s): array => [
+$boxes        = static fn (string $field): array => array_values(array_filter((array) (old($field) ?? []), 'is_array'));
+$oldServices  = array_map(static fn (array $s): array => [
     'title'  => (string) ($s['title'] ?? ''),
     'detail' => RichText::clean($s['detail'] ?? ''),
-], array_filter((array) (old('services') ?? []), 'is_array')));
-$oldTags = array_values(array_filter(array_map('strval', (array) (old('search_tags') ?? []))));
+], $boxes('services'));
+$oldAchievements = array_values(array_filter(array_map(
+    static fn ($a): string => is_string($a) ? RichText::clean($a) : '',
+    (array) (old('achievements') ?? [])
+)));
+$oldSkillGroups = array_map(static fn (array $g): array => [
+    'name'   => (string) ($g['name'] ?? ''),
+    'skills' => array_values(array_filter((array) ($g['skills'] ?? []), 'is_string')),
+], $boxes('skill_groups'));
+
+$json = static fn ($value): string => json_encode($value, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+
+$boxCls      = 'rounded-card bg-cream-25 p-5';
+$addBoxCls   = 'flex min-h-[10rem] items-center justify-center rounded-card border-2 border-dashed border-navy/15 hover:border-brand transition';
+$addBtnCls   = 'rounded-full bg-navy px-5 py-2.5 text-sm font-semibold text-white';
+$chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full border border-navy/15 bg-white px-3 py-2 focus-within:border-brand';
 ?>
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css">
@@ -79,34 +93,35 @@ $oldTags = array_values(array_filter(array_map('strval', (array) (old('search_ta
     </div>
   <?php endif; ?>
 
-  <!-- ── showcase ───────────────────────────────────── -->
+  <!-- ── photo, name, title, credentials ────────────── -->
   <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">Your showcase</h2>
+    <div class="flex flex-col items-center">
+      <label for="photo" class="relative cursor-pointer" title="Upload photo">
+        <span class="flex h-28 w-28 items-center justify-center overflow-hidden rounded-full border-2 border-navy bg-sky-50">
+          <img id="photo_preview" alt="" class="hidden h-full w-full object-cover">
+          <svg id="photo_placeholder" class="h-16 w-16 text-navy/30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5Z"/>
+          </svg>
+        </span>
+        <span class="absolute -bottom-1 -right-1 flex h-9 w-9 items-center justify-center rounded-full bg-white shadow">
+          <svg class="h-5 w-5 text-ink" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>
+          </svg>
+        </span>
+        <input type="file" id="photo" name="photo" accept="image/jpeg,image/png,image/webp" class="sr-only">
+      </label>
+      <p class="<?= $hintCls ?> text-center">Half length photo, at least 325px, up to 4MB.</p>
+      <?= $err('photo') ?>
 
-    <div class="mt-6 grid gap-5 sm:grid-cols-2">
-      <div class="sm:col-span-2">
-        <label for="service_category" class="<?= $labelCls ?>">Select a Category for your service <?= $req ?></label>
-        <select id="service_category" name="service_category" required class="<?= $inputCls ?>">
-          <option value="">Please select a category</option>
-          <?php foreach ($categories as $id => $cat): ?>
-            <option value="<?= esc($id) ?>" <?= (string) old('service_category') === (string) $id ? 'selected' : '' ?>><?= esc($cat) ?></option>
-          <?php endforeach; ?>
-        </select>
-        <?= $err('service_category') ?>
-      </div>
+      <label for="name" class="sr-only">Name</label>
+      <input type="text" id="name" name="name" required maxlength="150"
+             value="<?= esc(old('name', '')) ?>" placeholder="Your name *"
+             class="mt-4 w-full max-w-sm border-0 border-b-2 border-navy/15 bg-transparent text-center text-xl font-semibold text-ink placeholder:text-ink/35 focus:border-brand focus:outline-none focus:ring-0">
+      <?= $err('name') ?>
+    </div>
 
-      <!-- shown once a category is picked; options come from specialities.category_id -->
-      <div id="specialisation_field" class="sm:col-span-2" hidden>
-        <label for="specialisation" class="<?= $labelCls ?>">Area of specialisation <?= $req ?></label>
-        <select id="specialisation" name="specialisation" class="<?= $inputCls ?>" disabled
-                data-old="<?= esc((string) old('specialisation'), 'attr') ?>">
-          <option value="">Please select a specialisation</option>
-        </select>
-        <p id="specialisation_empty" class="<?= $hintCls ?>" hidden>This category has no specialisations.</p>
-        <?= $err('specialisation') ?>
-      </div>
-
-      <div class="sm:col-span-2">
+    <div class="mt-8 space-y-6">
+      <div>
         <label for="title" class="<?= $labelCls ?>">Title <?= $req ?></label>
         <input type="text" id="title" name="title" required maxlength="255"
                value="<?= esc(old('title', '')) ?>"
@@ -114,40 +129,8 @@ $oldTags = array_values(array_filter(array_map('strval', (array) (old('search_ta
         <?= $err('title') ?>
       </div>
       <div>
-        <label for="years" class="<?= $labelCls ?>">Years of Experience <?= $req ?></label>
-        <input type="number" id="years" name="years" min="0" max="70" required
-               value="<?= esc(old('years', '')) ?>" class="<?= $inputCls ?>">
-        <?= $err('years') ?>
-      </div>
-      <div>
-        <label for="seniority" class="<?= $labelCls ?>">Seniority <?= $req ?></label>
-        <select id="seniority" name="seniority" required class="<?= $inputCls ?>">
-          <option value="">Select seniority</option>
-          <?php foreach ($seniorityLevels as $value => $label): ?>
-            <option value="<?= esc($value) ?>" <?= old('seniority') === $value ? 'selected' : '' ?>><?= esc($label) ?></option>
-          <?php endforeach; ?>
-        </select>
-        <?= $err('seniority') ?>
-      </div>
-
-      <div class="sm:col-span-2">
-        <span class="<?= $labelCls ?>">Credentials <?= $req ?></span>
-        <?= $editor('credentials', 'Educational Degrees, significant Certificates, Professional Admissions, Awards and other relevant credentials', true, $oldRich('credentials')) ?>
-        <?= $err('credentials') ?>
-      </div>
-
-      <div class="sm:col-span-2">
-        <span class="<?= $labelCls ?>">Relevant Achievements</span>
-        <?= $editor('relevant_achievements', 'Past engagements and results, one per bullet. E.g. Advised banks, captives and independent insurers on...', false, $oldRich('relevant_achievements')) ?>
-        <?= $err('relevant_achievements') ?>
-      </div>
-
-      <div class="sm:col-span-2">
-        <label for="photo" class="<?= $labelCls ?>">Photo</label>
-        <input type="file" id="photo" name="photo" accept="image/jpeg,image/png,image/webp"
-               class="<?= $inputCls ?> file:mr-4 file:rounded-full file:border-0 file:bg-cream-50 file:px-4 file:py-1.5 file:text-sm file:font-semibold file:text-navy">
-        <p class="<?= $hintCls ?>">Half length profile picture. Minimum resolution 325px, maximum file size 4MB.</p>
-        <?= $err('photo') ?>
+        <span class="<?= $labelCls ?>">Credentials</span>
+        <?= $editor('credentials', 'Educational Degrees, significant Certificates, Professional Admissions, Awards and other relevant credentials', false, $oldRich('credentials')) ?>
       </div>
     </div>
   </section>
@@ -172,28 +155,87 @@ $oldTags = array_values(array_filter(array_map('strval', (array) (old('search_ta
     </div>
   </section>
 
+  <!-- ── category, specialisations, search tags ─────── -->
+  <?php require __DIR__ . '/partials/taxonomy-picker.php'; ?>
+
+  <!-- ── availability and rate ──────────────────────── -->
+  <section class="<?= $cardCls ?>">
+    <div class="space-y-6">
+      <div>
+        <h2 class="<?= $sectionCls ?> mb-3">Availability</h2>
+        <?= $editor('availability', 'State availability. E.g. On holiday from ___ to ___. | Committed on Monday, Wednesday & Friday afternoons? | Generally Available by Appointment', false, $oldRich('availability')) ?>
+      </div>
+      <div>
+        <h2 class="<?= $sectionCls ?> mb-3">Rate</h2>
+        <?= $editor('rate', 'E.g. S$250 per hour, or S$5,000 per project', false, $oldRich('rate')) ?>
+      </div>
+    </div>
+  </section>
+
   <!-- ── services I offer ───────────────────────────── -->
   <section class="<?= $cardCls ?>">
     <h2 class="<?= $sectionCls ?>">Services I offer <?= $req ?></h2>
-    <p class="<?= $hintCls ?>">One service per box. Add as many as you offer.</p>
+    <p class="<?= $hintCls ?>">One service per box.</p>
     <?= $err('services') ?>
 
     <div id="services" class="mt-6 grid gap-5 sm:grid-cols-2">
-      <button type="button" id="add_service"
-              class="flex min-h-[12rem] items-center justify-center rounded-card border-2 border-dashed border-navy/15 hover:border-brand transition">
-        <span class="rounded-full bg-navy px-5 py-2.5 text-sm font-semibold text-white">+ Add Another Service</span>
-      </button>
+      <button type="button" class="js-add <?= $addBoxCls ?>"><span class="<?= $addBtnCls ?>">+ Add Another Service</span></button>
     </div>
 
     <template id="service_template">
-      <div class="js-service rounded-card bg-cream-25 p-5">
+      <div class="js-box <?= $boxCls ?>">
         <div class="flex items-start gap-3">
           <input type="text" name="services[__i__][title]" required maxlength="255"
                  placeholder="Service Title" class="<?= $inputCls ?>">
-          <button type="button" class="js-remove-service mt-2 text-ink/50 hover:text-brand" aria-label="Remove service">&times;</button>
+          <button type="button" class="js-remove mt-2 text-ink/50 hover:text-brand" aria-label="Remove service">&times;</button>
         </div>
         <div class="mt-3">
-          <?= $editor('services[__i__][detail]', 'Enter detail for this service', false) ?>
+          <?= $editor('services[__i__][detail]', 'Enter detail for this service') ?>
+        </div>
+      </div>
+    </template>
+  </section>
+
+  <!-- ── relevant achievements ──────────────────────── -->
+  <section class="<?= $cardCls ?>">
+    <h2 class="<?= $sectionCls ?>">Relevant achievements</h2>
+    <p class="<?= $hintCls ?>">One achievement per box.</p>
+    <?= $err('achievements') ?>
+
+    <div id="achievements" class="mt-6 space-y-5">
+      <button type="button" class="js-add <?= $addBoxCls ?> w-full"><span class="<?= $addBtnCls ?>">+ Add Another Achievement</span></button>
+    </div>
+
+    <template id="achievement_template">
+      <div class="js-box <?= $boxCls ?> flex items-start gap-3">
+        <div class="flex-1">
+          <?= $editor('achievements[__i__]', 'Add relevant achievement here... (One achievement per box)') ?>
+        </div>
+        <button type="button" class="js-remove mt-2 text-ink/50 hover:text-brand" aria-label="Remove achievement">&times;</button>
+      </div>
+    </template>
+  </section>
+
+  <!-- ── technical proficiency ──────────────────────── -->
+  <section class="<?= $cardCls ?>">
+    <h2 class="<?= $sectionCls ?>">Technical proficiency</h2>
+    <p class="<?= $hintCls ?>">Group your technical skills. Press Enter or comma after each skill.</p>
+    <?= $err('skill_groups') ?>
+
+    <div id="skill_groups" class="mt-6 grid gap-5 sm:grid-cols-2">
+      <button type="button" class="js-add <?= $addBoxCls ?>"><span class="<?= $addBtnCls ?>">+ Add Another Category</span></button>
+    </div>
+
+    <template id="skill_group_template">
+      <div class="js-box <?= $boxCls ?>">
+        <div class="flex items-start gap-3">
+          <input type="text" name="skill_groups[__i__][name]" maxlength="100"
+                 placeholder="Category (e.g. Data &amp; Analytics)" class="<?= $inputCls ?>">
+          <button type="button" class="js-remove mt-2 text-ink/50 hover:text-brand" aria-label="Remove category">&times;</button>
+        </div>
+        <div class="mt-3 <?= $chipBoxCls ?>" data-name="skill_groups[__i__][skills][]">
+          <input type="text" class="js-chip-input min-w-[8rem] flex-1 border-0 bg-transparent p-1 text-sm focus:outline-none focus:ring-0"
+                 placeholder="Add skills (e.g. SAP, Python, Tableau)" maxlength="50">
         </div>
       </div>
     </template>
@@ -201,98 +243,14 @@ $oldTags = array_values(array_filter(array_map('strval', (array) (old('search_ta
 
   <!-- ── how I work ─────────────────────────────────── -->
   <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">How I work</h2>
-
-    <div class="mt-6 space-y-6">
-      <div>
-        <span class="<?= $labelCls ?>">How I Work <?= $req ?></span>
-        <?= $editor('how_i_work', 'Describe how you work, e.g. engagement types, travel willingness...', true, $oldRich('how_i_work')) ?>
-        <?= $err('how_i_work') ?>
-      </div>
-
-      <div>
-        <span class="<?= $labelCls ?>">Your preferred location of work <?= $req ?></span>
-        <div class="flex flex-wrap gap-2.5">
-          <?php foreach ($locations as $loc): ?>
-            <label class="<?= $chipCls ?>">
-              <input type="checkbox" name="locations[]" value="<?= esc($loc) ?>" class="<?= $checkCls ?>"
-                     <?= in_array($loc, $oldLocations, true) ? 'checked' : '' ?>>
-              <?= esc($loc) ?>
-            </label>
-          <?php endforeach; ?>
-        </div>
-        <?= $err('locations') ?>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── availability and rate ──────────────────────── -->
-  <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">Availability &amp; rate</h2>
-
-    <div class="mt-6 space-y-6">
-      <div class="grid gap-5 sm:grid-cols-2">
-        <div>
-          <label for="available_from" class="<?= $labelCls ?>">Available From <?= $req ?></label>
-          <input type="date" id="available_from" name="available_from" required
-                 value="<?= esc(old('available_from', '')) ?>" class="<?= $inputCls ?>">
-          <label class="mt-2 flex items-center gap-2 text-sm text-ink/75">
-            <input type="checkbox" id="available_now" name="available_now" value="1" class="<?= $checkCls ?>"
-                   <?= old('available_now') === '1' ? 'checked' : '' ?>>
-            Available now
-          </label>
-          <?= $err('available_from') ?>
-        </div>
-        <div>
-          <label for="capacity" class="<?= $labelCls ?>">Capacity <?= $req ?></label>
-          <select id="capacity" name="capacity" required class="<?= $inputCls ?>">
-            <option value="">Days per week</option>
-            <?php for ($d = 1; $d <= 5; $d++): ?>
-              <option value="<?= $d ?>" <?= old('capacity') === (string) $d ? 'selected' : '' ?>><?= $d ?> day<?= $d > 1 ? 's' : '' ?> a week</option>
-            <?php endfor; ?>
-          </select>
-          <?= $err('capacity') ?>
-        </div>
-      </div>
-      <div>
-        <span class="<?= $labelCls ?>">Availability Notes</span>
-        <?= $editor('availability', 'E.g. On holiday from ___ to ___. | Committed on Monday, Wednesday & Friday afternoons? | Generally Available by Appointment', false, $oldRich('availability')) ?>
-      </div>
-
-      <div>
-        <label for="rate_per_hour" class="<?= $labelCls ?>">Rate (per hour) <?= $req ?></label>
-        <div class="flex sm:max-w-xs">
-          <span class="inline-flex items-center rounded-l-lg border border-r-0 border-navy/15 bg-cream-25 px-3 text-sm font-medium text-ink/60">S$</span>
-          <input type="number" id="rate_per_hour" name="rate_per_hour" min="1" step="1" required
-                 value="<?= esc(old('rate_per_hour', '')) ?>"
-                 inputmode="numeric" class="<?= $inputCls ?> rounded-l-none">
-        </div>
-        <p class="<?= $hintCls ?>">Used to match you with Hirers' budgets.</p>
-        <?= $err('rate_per_hour') ?>
-      </div>
-      <div>
-        <span class="<?= $labelCls ?>">Rate Notes</span>
-        <?= $editor('rate_notes', 'E.g. Fixed-fee packages, retainers or minimum engagement', false, $oldRich('rate_notes')) ?>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── search tags ────────────────────────────────── -->
-  <section class="<?= $cardCls ?>">
-    <h2 class="<?= $sectionCls ?>">Search tags</h2>
-    <p class="<?= $hintCls ?>">Keywords Hirers might search for. Press Enter or comma after each tag.</p>
-
-    <div id="search_tags" class="mt-6 flex flex-wrap items-center gap-2 rounded-lg border border-navy/15 bg-cream-25 p-3 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20 transition">
-      <input type="text" id="search_tag_input" placeholder="e.g. due diligence" maxlength="50"
-             class="min-w-[10rem] flex-1 border-0 bg-transparent p-1 text-sm focus:outline-none focus:ring-0">
-    </div>
-    <?= $err('search_tags') ?>
+    <h2 class="<?= $sectionCls ?> mb-3">How I work</h2>
+    <?= $editor('how_i_work', 'Describe how you work, e.g. engagement types, availability, travel willingness...', false, $oldRich('how_i_work')) ?>
   </section>
 
   <!-- ── links ──────────────────────────────────────── -->
   <section class="<?= $cardCls ?>">
     <h2 class="<?= $sectionCls ?>">Links</h2>
-    <p class="<?= $hintCls ?>">Attach supporting documents to each category. Each document belongs to one category.
+    <p class="<?= $hintCls ?>">Attach documents to each category. Each document can only be linked to one category.
       PDF, Word, PowerPoint or image files up to 4MB each.</p>
 
     <ul class="mt-6 divide-y divide-navy/10">
@@ -331,38 +289,35 @@ $oldTags = array_values(array_filter(array_map('strval', (array) (old('search_ta
 </form>
 
 <script>
-/**
- * Category -> specialisation dropdown. Specialisations are keyed by their
- * parent category id (specialities.category_id).
- */
-(function () {
-  var map      = <?= json_encode((object) $specialisations, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
-  var category = document.getElementById('service_category');
-  var field    = document.getElementById('specialisation_field');
-  var select   = document.getElementById('specialisation');
-  var empty    = document.getElementById('specialisation_empty');
-
-  function render() {
-    var options = map[category.value] || {};
-    var ids = Object.keys(options).sort(function (a, b) { return options[a].localeCompare(options[b]); });
-
-    select.length = 1; // keep the placeholder
-    ids.forEach(function (id) { select.add(new Option(options[id], id)); });
-
-    field.hidden    = category.value === '';
-    select.disabled = ids.length === 0;
-    select.required = ids.length > 0;
-    empty.hidden    = ids.length > 0;
-  }
-
-  category.addEventListener('change', render);
-  render();
-  select.value = select.dataset.old; // re-select after a validation error
-})();
-
-/** Rich-text editors (Quill), services repeater, search tags and link file lists. */
 (function () {
   var form = document.getElementById('profile_form');
+  var chipCls = 'inline-flex items-center gap-1.5 rounded-full bg-navy px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy-dark transition-colors';
+
+  // Elements with a Tailwind display class need the .hidden class, not [hidden].
+  function show(el, visible) { el.classList.toggle('hidden', !visible); }
+
+  function chip(text, onRemove) {
+    var el = document.createElement('button');
+    el.type = 'button';
+    el.className = chipCls;
+    el.textContent = text;
+    el.setAttribute('aria-label', 'Remove ' + text);
+    el.insertAdjacentHTML('beforeend', '<span aria-hidden="true">&times;</span>');
+    el.addEventListener('click', function () { onRemove(el); });
+    return el;
+  }
+
+  /* ── photo preview ─────────────────────────────── */
+  var photo = document.getElementById('photo');
+  photo.addEventListener('change', function () {
+    var file = photo.files[0];
+    var img  = document.getElementById('photo_preview');
+    if (file) img.src = URL.createObjectURL(file);
+    show(img, !!file);
+    show(document.getElementById('photo_placeholder'), !file);
+  });
+
+  /* ── rich-text editors (Quill) ─────────────────── */
   var toolbar = [['bold', 'italic', 'underline'], [{ list: 'ordered' }, { list: 'bullet' }], ['clean']];
 
   function initEditor(root) {
@@ -379,92 +334,84 @@ $oldTags = array_values(array_filter(array_map('strval', (array) (old('search_ta
   }
   document.querySelectorAll('.js-rte').forEach(initEditor); // template content isn't matched
 
-  // Hidden inputs can't use `required`, so check editors on submit.
-  form.addEventListener('submit', function (e) {
-    var blank = Array.prototype.find.call(form.querySelectorAll('.js-rte[data-required]'), function (root) {
-      return root.querySelector('.js-rte-input').value === '';
-    });
-    if (blank) {
-      e.preventDefault();
-      blank.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      blank.quill.focus();
+  /* ── chip inputs (technical skills) ────────────── */
+  function initChipBox(box, values) {
+    var input = box.querySelector('.js-chip-input');
+
+    function add(text) {
+      text = text.trim();
+      if (!text) return;
+      var exists = Array.prototype.some.call(box.querySelectorAll('input[type=hidden]'), function (i) {
+        return i.value.toLowerCase() === text.toLowerCase();
+      });
+      if (exists) return;
+
+      var el = chip(text, function (c) { c.remove(); });
+      var hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.name = box.dataset.name;
+      hidden.value = text;
+      el.appendChild(hidden);
+      box.insertBefore(el, input);
     }
+
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        add(input.value);
+        input.value = '';
+      } else if (e.key === 'Backspace' && input.value === '' && input.previousElementSibling) {
+        input.previousElementSibling.remove();
+      }
+    });
+    input.addEventListener('blur', function () { add(input.value); input.value = ''; });
+    (values || []).forEach(add);
+  }
+
+  /* ── repeatable boxes ──────────────────────────── */
+  // Each box comes from a <template>; "__i__" becomes a unique index. At least
+  // one box is always kept. fill(box, value) restores re-filled input.
+  function repeater(containerId, templateId, values, fill) {
+    var container = document.getElementById(containerId);
+    var addBtn    = container.querySelector('.js-add');
+    var tpl       = document.getElementById(templateId);
+    var next      = 0;
+
+    function add(value) {
+      addBtn.insertAdjacentHTML('beforebegin', tpl.innerHTML.replace(/__i__/g, String(next++)));
+      var box = addBtn.previousElementSibling;
+      box.querySelectorAll('.js-rte').forEach(initEditor);
+      fill(box, value);
+      box.querySelector('.js-remove').addEventListener('click', function () {
+        if (container.querySelectorAll('.js-box').length > 1) box.remove();
+      });
+      return box;
+    }
+
+    addBtn.addEventListener('click', function () {
+      var box = add();
+      (box.querySelector('input[type=text]') || box.querySelector('.ql-editor')).focus();
+    });
+    if (values.length) values.forEach(add); else add();
+  }
+
+  // Re-filled rich text was sanitised server-side (RichText::clean).
+  function paste(box, html) {
+    if (html) box.querySelector('.js-rte').quill.clipboard.dangerouslyPasteHTML(html);
+  }
+
+  repeater('services', 'service_template', <?= $json($oldServices) ?>, function (box, s) {
+    if (!s) return;
+    box.querySelector('input[type=text]').value = s.title;
+    paste(box, s.detail);
+  });
+  repeater('achievements', 'achievement_template', <?= $json($oldAchievements) ?>, paste);
+  repeater('skill_groups', 'skill_group_template', <?= $json($oldSkillGroups) ?>, function (box, g) {
+    if (g) box.querySelector('input[type=text]').value = g.name;
+    initChipBox(box.querySelector('.js-chip-box'), g ? g.skills : []);
   });
 
-  // Services I offer: one box per service, at least one kept.
-  var services    = document.getElementById('services');
-  var addBtn      = document.getElementById('add_service');
-  var tpl         = document.getElementById('service_template');
-  var oldServices = <?= json_encode($oldServices, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
-  var next        = 0;
-
-  function addService(service) {
-    var html = tpl.innerHTML.replace(/__i__/g, String(next++));
-    addBtn.insertAdjacentHTML('beforebegin', html);
-    var box = addBtn.previousElementSibling;
-    box.querySelectorAll('.js-rte').forEach(initEditor);
-    if (service) {
-      box.querySelector('input[type=text]').value = service.title;
-      // detail was sanitised server-side (RichText::clean).
-      if (service.detail) box.querySelector('.js-rte').quill.clipboard.dangerouslyPasteHTML(service.detail);
-    }
-    box.querySelector('.js-remove-service').addEventListener('click', function () {
-      if (services.querySelectorAll('.js-service').length > 1) box.remove();
-    });
-    return box;
-  }
-  addBtn.addEventListener('click', function () { addService().querySelector('input').focus(); });
-  if (oldServices.length) oldServices.forEach(addService); else addService();
-
-  // Search tags: Enter/comma turns the typed text into a removable chip.
-  var tagBox   = document.getElementById('search_tags');
-  var tagInput = document.getElementById('search_tag_input');
-
-  function addTag(text) {
-    text = text.trim();
-    if (!text) return;
-    var exists = Array.prototype.some.call(tagBox.querySelectorAll('input[type=hidden]'), function (i) {
-      return i.value.toLowerCase() === text.toLowerCase();
-    });
-    if (exists) return;
-
-    var chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'inline-flex items-center gap-1.5 rounded-full bg-navy px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy-dark transition-colors';
-    chip.textContent = text;
-    chip.setAttribute('aria-label', 'Remove ' + text);
-    chip.insertAdjacentHTML('beforeend', '<span aria-hidden="true">&times;</span>');
-    var hidden = document.createElement('input');
-    hidden.type = 'hidden';
-    hidden.name = 'search_tags[]';
-    hidden.value = text;
-    chip.appendChild(hidden);
-    chip.addEventListener('click', function () { chip.remove(); });
-    tagBox.insertBefore(chip, tagInput);
-  }
-  tagInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ',') {
-      e.preventDefault();
-      addTag(tagInput.value);
-      tagInput.value = '';
-    } else if (e.key === 'Backspace' && tagInput.value === '' && tagInput.previousElementSibling) {
-      tagInput.previousElementSibling.remove();
-    }
-  });
-  tagInput.addEventListener('blur', function () { addTag(tagInput.value); tagInput.value = ''; });
-  <?= json_encode($oldTags, JSON_HEX_TAG | JSON_HEX_AMP) ?>.forEach(addTag);
-
-  // "Available now" stands in for a date (saved as available_now = 1, no date).
-  var availNow  = document.getElementById('available_now');
-  var availFrom = document.getElementById('available_from');
-  function syncAvailability() {
-    availFrom.disabled = availFrom.hidden = availNow.checked;
-    availFrom.required = !availNow.checked;
-  }
-  availNow.addEventListener('change', syncAvailability);
-  syncAvailability();
-
-  // Links: list the chosen file names under each category.
+  /* ── links: list chosen file names ─────────────── */
   document.querySelectorAll('.js-link-file').forEach(function (input) {
     input.addEventListener('change', function () {
       var list = input.closest('li').querySelector('.js-link-files');
@@ -475,6 +422,18 @@ $oldTags = array_values(array_filter(array_map('strval', (array) (old('search_ta
         list.appendChild(li);
       });
     });
+  });
+
+  /* ── required rich text (hidden inputs can't use `required`) ── */
+  form.addEventListener('submit', function (e) {
+    var blank = Array.prototype.find.call(form.querySelectorAll('.js-rte[data-required]'), function (root) {
+      return root.querySelector('.js-rte-input').value === '';
+    });
+    if (blank) {
+      e.preventDefault();
+      blank.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      blank.quill.focus();
+    }
   });
 })();
 </script>

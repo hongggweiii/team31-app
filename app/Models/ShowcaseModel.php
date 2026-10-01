@@ -6,14 +6,6 @@ use CodeIgniter\Model;
 
 class ShowcaseModel extends Model
 {
-    public const LOCATIONS = [
-        'Virtual Only', 'Anywhere',
-        'Raffles Place, Marina, Cecil', 'Anson, Tanjong Pagar', 'Tiong Bahru, Queenstown',
-        'Telok Blangah, Harbourfront', 'High Street, Beach Road', 'Little India',
-        'Orchard, Cairnhill, River Valley', 'Bukit Timah, Holland Road, Tanglin',
-        'Novena, Thomson', 'Toa Payoh, Serangoon, Balestier',
-    ];
-
     /** "Links" upload categories: key => label. */
     public const DOCUMENT_CATEGORIES = [
         'completed_projects' => 'Completed Projects',
@@ -27,68 +19,70 @@ class ShowcaseModel extends Model
     protected $primaryKey    = 'id';
     protected $returnType    = 'array';
     protected $allowedFields = [
-        'user_id', 'category_id', 'speciality_id', 'title', 'years_experience', 'seniority',
-        'credentials', 'relevant_achievements', 'headline', 'about', 'how_i_work', 'locations',
-        'available_now', 'available_from', 'capacity', 'availability_notes', 'rate_per_hour',
-        'rate_notes', 'search_tags', 'photo_path', 'status',
+        'user_id', 'name', 'photo_path', 'title', 'credentials', 'headline', 'about',
+        'availability', 'rate', 'how_i_work', 'status',
     ];
     protected $useTimestamps = true;
     protected $createdField  = 'created_at';
     protected $updatedField  = 'updated_at';
 
-    protected array $casts = [
-        'locations'     => 'json-array',
-        'search_tags'   => '?json-array',
-        'available_now' => 'boolean',
-    ];
-
     protected $validationRules = [
-        'user_id'          => 'required|is_natural_no_zero',
-        'category_id'      => 'required|is_natural_no_zero',
-        'title'            => 'required|max_length[255]',
-        'years_experience' => 'required|is_natural|less_than_equal_to[70]',
-        'seniority'        => 'required|in_list[mid,senior,expert]',
-        'credentials'      => 'required',
-        'headline'         => 'required|max_length[255]',
-        'about'            => 'required',
-        'how_i_work'       => 'required',
-        'available_from'   => 'permit_empty|valid_date[Y-m-d]',
-        'capacity'         => 'required|is_natural_no_zero|less_than_equal_to[5]',
-        'rate_per_hour'    => 'required|is_natural_no_zero',
+        'user_id'  => 'required|is_natural_no_zero',
+        'name'     => 'required|max_length[150]',
+        'title'    => 'required|max_length[255]',
+        'headline' => 'required|max_length[255]',
+        'about'    => 'required',
     ];
 
     /**
-     * Inserts a showcase with its services and documents in one transaction.
+     * Inserts a showcase and all of its child rows in one transaction.
      *
-     * @param list<array{title: string, description: ?string}>                $services
-     * @param list<array{category: string, path: string, original_name: string}> $documents
+     * @param array{
+     *     categories: list<int>,
+     *     specialities: list<int>,
+     *     services: list<array{title: string, description: ?string}>,
+     *     achievements: list<string>,
+     *     skill_groups: list<array{name: string, skills: list<string>}>,
+     *     documents: list<array{category: string, path: string, original_name: string}>,
+     * } $children
      *
      * @return int|false New showcase id, or false if any insert failed.
      */
-    public function createWithChildren(array $showcase, array $services, array $documents): int|false
+    public function createWithChildren(array $showcase, array $children): int|false
     {
         $this->db->transStart();
 
-        $showcaseId = $this->insert($showcase);
+        $id = $this->insert($showcase);
 
-        if ($showcaseId !== false) {
-            $rows = [];
-            foreach (array_values($services) as $i => $service) {
-                $rows[] = ['showcase_id' => $showcaseId, 'sort_order' => $i] + $service;
-            }
-            $this->db->table('showcase_services')->insertBatch($rows);
-
-            if ($documents !== []) {
-                $now = date('Y-m-d H:i:s');
-                $this->db->table('showcase_documents')->insertBatch(array_map(
-                    static fn (array $doc): array => ['showcase_id' => $showcaseId, 'created_at' => $now] + $doc,
-                    $documents
-                ));
+        if ($id !== false) {
+            $rows = [
+                'showcase_categories'   => array_map(static fn (int $c): array => ['category_id' => $c], $children['categories']),
+                'showcase_specialities' => array_map(static fn (int $s): array => ['speciality_id' => $s], $children['specialities']),
+                'showcase_services'     => self::ordered($children['services']),
+                'showcase_achievements' => self::ordered(array_map(static fn (string $a): array => ['description' => $a], $children['achievements'])),
+                'showcase_skill_groups' => self::ordered(array_map(static fn (array $g): array => [
+                    'name'   => $g['name'],
+                    'skills' => json_encode(array_values($g['skills'])),
+                ], $children['skill_groups'])),
+                'showcase_documents' => array_map(static fn (array $d): array => $d + ['created_at' => date('Y-m-d H:i:s')], $children['documents']),
+            ];
+            foreach ($rows as $table => $tableRows) {
+                if ($tableRows !== []) {
+                    $this->db->table($table)->insertBatch(array_map(static fn (array $r): array => ['showcase_id' => $id] + $r, $tableRows));
+                }
             }
         }
 
         $this->db->transComplete();
 
-        return $this->db->transStatus() && $showcaseId !== false ? (int) $showcaseId : false;
+        return $this->db->transStatus() && $id !== false ? (int) $id : false;
+    }
+
+    /**
+     * Adds sort_order to repeatable-box rows, in the order given.
+     */
+    private static function ordered(array $rows): array
+    {
+        return array_map(static fn (array $row, int $i): array => $row + ['sort_order' => $i], array_values($rows), array_keys(array_values($rows)));
     }
 }

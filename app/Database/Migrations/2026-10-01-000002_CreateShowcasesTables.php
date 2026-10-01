@@ -7,57 +7,77 @@ use CodeIgniter\Database\Migration;
 /**
  * Showcases are service listings created by a logged-in user acting as a
  * Provider; hirers' gigs are matched against them. A user may have several.
- * As with gigs, category / speciality ids have no FK to the legacy taxonomy
- * tables (signed int ids).
+ * Fields mirror the client's "create showcase" form. Repeatable sections and
+ * multi-selects live in child tables. As with gigs, category / speciality ids
+ * have no FK to the legacy taxonomy tables.
  */
 class CreateShowcasesTables extends Migration
 {
     public function up(): void
     {
         $this->forge->addField([
-            'id'                    => ['type' => 'int', 'constraint' => 11, 'unsigned' => true, 'auto_increment' => true],
-            'user_id'               => ['type' => 'int', 'constraint' => 11, 'unsigned' => true],
-            'category_id'           => ['type' => 'int', 'constraint' => 11],
-            'speciality_id'         => ['type' => 'int', 'constraint' => 11, 'null' => true],
-            'title'                 => ['type' => 'varchar', 'constraint' => 255],
-            'years_experience'      => ['type' => 'tinyint', 'constraint' => 3, 'unsigned' => true],
-            'seniority'             => ['type' => 'varchar', 'constraint' => 10],
-            'credentials'           => ['type' => 'text'],
-            'relevant_achievements' => ['type' => 'text', 'null' => true],
-            'headline'              => ['type' => 'varchar', 'constraint' => 255],
-            'about'                 => ['type' => 'text'],
-            'how_i_work'            => ['type' => 'text'],
-            'locations'             => ['type' => 'text'],
-            'available_now'         => ['type' => 'tinyint', 'constraint' => 1, 'default' => 0],
-            'available_from'        => ['type' => 'date', 'null' => true],
-            'capacity'              => ['type' => 'tinyint', 'constraint' => 1, 'unsigned' => true],
-            'availability_notes'    => ['type' => 'text', 'null' => true],
-            'rate_per_hour'         => ['type' => 'int', 'constraint' => 11, 'unsigned' => true],
-            'rate_notes'            => ['type' => 'text', 'null' => true],
-            'search_tags'           => ['type' => 'text', 'null' => true],
-            'photo_path'            => ['type' => 'varchar', 'constraint' => 255, 'null' => true],
-            'status'                => ['type' => 'varchar', 'constraint' => 20, 'default' => 'published'],
-            'created_at'            => ['type' => 'datetime', 'null' => true],
-            'updated_at'            => ['type' => 'datetime', 'null' => true],
+            'id'           => ['type' => 'int', 'constraint' => 11, 'unsigned' => true, 'auto_increment' => true],
+            'user_id'      => ['type' => 'int', 'constraint' => 11, 'unsigned' => true],
+            'name'         => ['type' => 'varchar', 'constraint' => 150],
+            'photo_path'   => ['type' => 'varchar', 'constraint' => 255, 'null' => true],
+            'title'        => ['type' => 'varchar', 'constraint' => 255],
+            'credentials'  => ['type' => 'text', 'null' => true],
+            'headline'     => ['type' => 'varchar', 'constraint' => 255],
+            'about'        => ['type' => 'text'],
+            'availability' => ['type' => 'text', 'null' => true],
+            'rate'         => ['type' => 'text', 'null' => true],
+            'how_i_work'   => ['type' => 'text', 'null' => true],
+            'status'       => ['type' => 'varchar', 'constraint' => 20, 'default' => 'published'],
+            'created_at'   => ['type' => 'datetime', 'null' => true],
+            'updated_at'   => ['type' => 'datetime', 'null' => true],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('user_id');
-        $this->forge->addKey('category_id');
         $this->forge->addForeignKey('user_id', 'users', 'id', '', 'CASCADE');
         $this->forge->createTable('showcases');
 
-        // "Services I offer" boxes, in the order they were entered.
-        $this->forge->addField([
-            'id'          => ['type' => 'int', 'constraint' => 11, 'unsigned' => true, 'auto_increment' => true],
-            'showcase_id' => ['type' => 'int', 'constraint' => 11, 'unsigned' => true],
-            'title'       => ['type' => 'varchar', 'constraint' => 255],
-            'description' => ['type' => 'text', 'null' => true],
-            'sort_order'  => ['type' => 'smallint', 'constraint' => 5, 'unsigned' => true, 'default' => 0],
-        ]);
-        $this->forge->addPrimaryKey('id');
-        $this->forge->addKey('showcase_id');
-        $this->forge->addForeignKey('showcase_id', 'showcases', 'id', '', 'CASCADE');
-        $this->forge->createTable('showcase_services');
+        // Category / specialisation multi-selects. Search tags are derived from
+        // showcase_specialities as "Specialisation (Category)", not stored.
+        foreach (['showcase_categories' => 'category_id', 'showcase_specialities' => 'speciality_id'] as $table => $column) {
+            $this->forge->addField([
+                'showcase_id' => ['type' => 'int', 'constraint' => 11, 'unsigned' => true],
+                $column       => ['type' => 'int', 'constraint' => 11],
+            ]);
+            $this->forge->addPrimaryKey(['showcase_id', $column]);
+            $this->forge->addKey($column);
+            $this->forge->addForeignKey('showcase_id', 'showcases', 'id', '', 'CASCADE');
+            $this->forge->createTable($table);
+        }
+
+        // Repeatable boxes, kept in the order they were entered.
+        $children = [
+            // "Services I offer": one service per box.
+            'showcase_services' => [
+                'title'       => ['type' => 'varchar', 'constraint' => 255],
+                'description' => ['type' => 'text', 'null' => true],
+            ],
+            // "Relevant achievements": one achievement per box.
+            'showcase_achievements' => [
+                'description' => ['type' => 'text'],
+            ],
+            // "Technical proficiency": a named group of skills, skills as a JSON list.
+            'showcase_skill_groups' => [
+                'name'   => ['type' => 'varchar', 'constraint' => 100],
+                'skills' => ['type' => 'text'],
+            ],
+        ];
+        foreach ($children as $table => $fields) {
+            $this->forge->addField(
+                ['id' => ['type' => 'int', 'constraint' => 11, 'unsigned' => true, 'auto_increment' => true],
+                    'showcase_id' => ['type' => 'int', 'constraint' => 11, 'unsigned' => true]]
+                + $fields
+                + ['sort_order' => ['type' => 'smallint', 'constraint' => 5, 'unsigned' => true, 'default' => 0]]
+            );
+            $this->forge->addPrimaryKey('id');
+            $this->forge->addKey('showcase_id');
+            $this->forge->addForeignKey('showcase_id', 'showcases', 'id', '', 'CASCADE');
+            $this->forge->createTable($table);
+        }
 
         // "Links" uploads, one row per file, tagged with its link category.
         $this->forge->addField([
@@ -76,8 +96,9 @@ class CreateShowcasesTables extends Migration
 
     public function down(): void
     {
-        $this->forge->dropTable('showcase_documents', true);
-        $this->forge->dropTable('showcase_services', true);
-        $this->forge->dropTable('showcases', true);
+        foreach (['showcase_documents', 'showcase_skill_groups', 'showcase_achievements', 'showcase_services',
+            'showcase_specialities', 'showcase_categories', 'showcases'] as $table) {
+            $this->forge->dropTable($table, true);
+        }
     }
 }
