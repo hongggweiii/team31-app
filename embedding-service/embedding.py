@@ -68,3 +68,9 @@ def embed_provider(p: dict) -> list[float]:
     """One provider profile -> unit-length EMBED_DIM vector (cosine-ready)."""
     raw = encode_docs([provider_text(p)])
     return _truncate_and_normalize(raw, EMBED_DIM)[0].tolist()
+
+
+def embed_providers(ps: list[dict]) -> list[list[float]]:
+    """Many provider profiles in one encode call -> unit-length vectors, in order."""
+    raw = encode_docs([provider_text(p) for p in ps])
+    return _truncate_and_normalize(raw, EMBED_DIM).tolist()

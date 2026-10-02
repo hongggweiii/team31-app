@@ -13,8 +13,8 @@ use RuntimeException;
  * fields exactly as the ranker does (ranker/pipeline/corpus.py +
  * retrieval_dense.py).
  *
- * A showcase maps onto those fields in fieldsFromShowcase(). Pushing the
- * result into the vector DB is left to the caller.
+ * A showcase maps onto those fields in fieldsFromShowcase(). Vectors are
+ * stored by EmbeddingStore, filled offline by `php spark embed:batch`.
  */
 class ProviderEmbedder
 {
@@ -57,22 +57,69 @@ class ProviderEmbedder
             throw new RuntimeException("Showcase {$showcaseId} not found");
         }
 
-        $db    = db_connect();
-        $child = static fn (string $table, string $columns): array => $db->table($table)
-            ->select($columns)
-            ->where('showcase_id', $showcaseId)
-            ->orderBy('sort_order')
-            ->orderBy('id')
-            ->get()
-            ->getResultArray();
+        return ['showcase_id' => $showcaseId] + $this->embed(self::showcaseFields([$showcase])[$showcaseId]);
+    }
 
-        $fields = self::fieldsFromShowcase(
-            $showcase,
-            $child('showcase_services', 'title, description'),
-            array_column($child('showcase_achievements', 'description'), 'description'),
-        );
+    /**
+     * Maps saved showcases onto the ranker's fields, loading their services and
+     * achievements in two queries for the whole list.
+     *
+     * @param list<array<string, mixed>> $showcases showcases rows
+     *
+     * @return array<int, array<string, string>> Keyed by showcase id, values as fieldsFromShowcase()
+     */
+    public static function showcaseFields(array $showcases): array
+    {
+        if ($showcases === []) {
+            return [];
+        }
 
-        return ['showcase_id' => $showcaseId] + $this->embed($fields);
+        $ids      = array_map(static fn (array $s): int => (int) $s['id'], $showcases);
+        $db       = db_connect();
+        $children = static function (string $table, string $columns) use ($db, $ids): array {
+            $byShowcase = [];
+            $rows       = $db->table($table)->select("showcase_id, {$columns}")->whereIn('showcase_id', $ids)
+                ->orderBy('sort_order')->orderBy('id')->get()->getResultArray();
+            foreach ($rows as $row) {
+                $byShowcase[(int) $row['showcase_id']][] = $row;
+            }
+
+            return $byShowcase;
+        };
+        $services     = $children('showcase_services', 'title, description');
+        $achievements = $children('showcase_achievements', 'description');
+
+        $fields = [];
+        foreach ($showcases as $showcase) {
+            $id          = (int) $showcase['id'];
+            $fields[$id] = self::fieldsFromShowcase($showcase, $services[$id] ?? [], array_column($achievements[$id] ?? [], 'description'));
+        }
+
+        return $fields;
+    }
+
+    /**
+     * The exact text embedding-service/ embeds for these fields (provider_text
+     * in embedding.py: FIELDS in order, empty ones skipped, space-joined).
+     *
+     * @param array<string, mixed> $provider
+     */
+    public static function providerText(array $provider): string
+    {
+        $parts = array_map(static fn (string $field): string => (string) ($provider[$field] ?? ''), self::FIELDS);
+
+        return implode(' ', array_filter($parts, static fn (string $part): bool => $part !== ''));
+    }
+
+    /**
+     * sha256 of providerText(), stored next to each vector so batches can skip
+     * showcases whose embedded text hasn't changed.
+     *
+     * @param array<string, mixed> $provider
+     */
+    public static function textHash(array $provider): string
+    {
+        return hash('sha256', self::providerText($provider));
     }
 
     /**
@@ -127,14 +174,68 @@ class ProviderEmbedder
      */
     public function embed(array $provider): array
     {
-        $payload = [];
+        $data      = $this->post('embed/provider', self::payload($provider));
+        $embedding = $this->checkVector(is_array($data) ? ($data['embedding'] ?? null) : null);
 
+        return [
+            'model'      => (string) ($data['model'] ?? ''),
+            'dimensions' => count($embedding),
+            'embedding'  => $embedding,
+        ];
+    }
+
+    /**
+     * Embeds many providers in one request (the service caps a batch at 128).
+     *
+     * @param array<array-key, array<string, mixed>> $providers Keys are kept
+     *
+     * @return array{model: string, embeddings: array<array-key, list<float>>} Same keys as $providers
+     *
+     * @throws RuntimeException As embed(), or when the number of vectors returned doesn't match
+     */
+    public function embedMany(array $providers): array
+    {
+        if ($providers === []) {
+            return ['model' => '', 'embeddings' => []];
+        }
+
+        $data       = $this->post('embed/providers', ['providers' => array_map(self::payload(...), array_values($providers))]);
+        $embeddings = is_array($data) ? ($data['embeddings'] ?? null) : null;
+
+        if (! is_array($embeddings) || count($embeddings) !== count($providers)) {
+            throw new RuntimeException(
+                'Embedding service returned ' . (is_array($embeddings) ? count($embeddings) : 'no') . ' embeddings for ' . count($providers) . ' providers',
+            );
+        }
+
+        return [
+            'model'      => (string) ($data['model'] ?? ''),
+            'embeddings' => array_combine(array_keys($providers), array_map($this->checkVector(...), $embeddings)),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed> Exactly FIELDS, missing ones null
+     */
+    private static function payload(array $provider): array
+    {
+        $payload = [];
         foreach (self::FIELDS as $field) {
             $payload[$field] = $provider[$field] ?? null;
         }
 
-        $response = $this->client->post('embed/provider', [
-            'json'        => $payload,
+        return $payload;
+    }
+
+    /**
+     * POSTs JSON to the service and returns the decoded body.
+     *
+     * @throws RuntimeException On a non-200 response
+     */
+    private function post(string $path, array $json): mixed
+    {
+        $response = $this->client->post($path, [
+            'json'        => $json,
             'http_errors' => false,
         ]);
 
@@ -145,9 +246,16 @@ class ProviderEmbedder
             throw new RuntimeException("Embedding service returned HTTP {$status}: {$body}");
         }
 
-        $data      = json_decode($body, true);
-        $embedding = is_array($data) ? ($data['embedding'] ?? null) : null;
+        return json_decode($body, true);
+    }
 
+    /**
+     * @return list<float>
+     *
+     * @throws RuntimeException When $embedding isn't a vector of the configured length
+     */
+    private function checkVector(mixed $embedding): array
+    {
         if (! is_array($embedding) || count($embedding) !== $this->config->dimensions) {
             throw new RuntimeException(
                 'Embedding service returned ' . (is_array($embedding) ? count($embedding) . ' dimensions' : 'no embedding')
@@ -155,11 +263,7 @@ class ProviderEmbedder
             );
         }
 
-        return [
-            'model'      => (string) ($data['model'] ?? ''),
-            'dimensions' => count($embedding),
-            'embedding'  => $embedding,
-        ];
+        return $embedding;
     }
 
     /**

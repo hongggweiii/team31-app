@@ -55,7 +55,7 @@ $err = static function (string $field) use ($errors): string {
       <div>
         <label for="gig_title" class="<?= $labelCls ?>">Gig Title <?= $req ?></label>
         <input type="text" id="gig_title" name="gig_title" required maxlength="500"
-               value="<?= esc(old('gig_title', '')) ?>"
+               value="<?= esc(old('gig_title', '', false)) ?>"
                placeholder="e.g. Interim CFO for a pre-Series B fintech" class="<?= $inputCls ?>">
         <?= $err('gig_title') ?>
       </div>
@@ -63,7 +63,7 @@ $err = static function (string $field) use ($errors): string {
       <div>
         <label for="gig_summary" class="<?= $labelCls ?>">Short Gig Description <?= $req ?></label>
         <textarea id="gig_summary" name="gig_summary" rows="4" required
-                  placeholder="Summarise the engagement in a few sentences." class="<?= $inputCls ?>"><?= esc(old('gig_summary', '')) ?></textarea>
+                  placeholder="Summarise the engagement in a few sentences." class="<?= $inputCls ?>"><?= esc(old('gig_summary', '', false)) ?></textarea>
         <?= $err('gig_summary') ?>
         <p class="<?= $hintCls ?>">This is what Providers see in search results.</p>
       </div>

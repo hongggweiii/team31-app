@@ -9,8 +9,8 @@
  * are only displayed; they are derived from the ticked specialisations.
  */
 $categoryNames = array_replace([], ...array_values($categoryGroups));
-$oldCategories = array_map('strval', (array) (old('categories') ?? []));
-$oldSpecs      = array_map('strval', (array) (old('specialisations') ?? []));
+$oldCategories = array_map('strval', (array) old('categories', [], false));
+$oldSpecs      = array_map('strval', (array) old('specialisations', [], false));
 
 $listCardCls = 'rounded-card border border-navy/10 bg-white overflow-hidden';
 $searchCls   = 'w-full border-0 border-y border-navy/10 px-6 py-3 text-sm placeholder:text-ink/35 focus:outline-none focus:ring-0';
