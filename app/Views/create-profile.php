@@ -33,16 +33,18 @@ $editor = static fn (string $name, string $placeholder, bool $required = false, 
     . '<div class="js-rte-body min-h-[7rem] text-sm">' . $value . '</div>'
     . '<input type="hidden" name="' . esc($name, 'attr') . '" value="' . esc($value, 'attr') . '" class="js-rte-input">'
     . '</div>';
-$oldRich = static fn (string $name): string => RichText::clean(old($name) ?? '');
+// Old input is read raw (old()'s default HTML-escaping would turn "<p>" into literal
+// "&lt;p&gt;" text on re-submit); everything below is sanitised or escaped on output.
+$oldRich = static fn (string $name): string => RichText::clean(old($name, '', false));
 
-$boxes        = static fn (string $field): array => array_values(array_filter((array) (old($field) ?? []), 'is_array'));
+$boxes        = static fn (string $field): array => array_values(array_filter((array) old($field, [], false), 'is_array'));
 $oldServices  = array_map(static fn (array $s): array => [
     'title'  => (string) ($s['title'] ?? ''),
     'detail' => RichText::clean($s['detail'] ?? ''),
 ], $boxes('services'));
 $oldAchievements = array_values(array_filter(array_map(
     static fn ($a): string => is_string($a) ? RichText::clean($a) : '',
-    (array) (old('achievements') ?? [])
+    (array) old('achievements', [], false)
 )));
 $oldSkillGroups = array_map(static fn (array $g): array => [
     'name'   => (string) ($g['name'] ?? ''),
@@ -115,7 +117,7 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
 
       <label for="name" class="sr-only">Name</label>
       <input type="text" id="name" name="name" required maxlength="150"
-             value="<?= esc(old('name', '')) ?>" placeholder="Your name *"
+             value="<?= esc(old('name', '', false)) ?>" placeholder="Your name *"
              class="mt-4 w-full max-w-sm border-0 border-b-2 border-navy/15 bg-transparent text-center text-xl font-semibold text-ink placeholder:text-ink/35 focus:border-brand focus:outline-none focus:ring-0">
       <?= $err('name') ?>
     </div>
@@ -124,7 +126,7 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
       <div>
         <label for="title" class="<?= $labelCls ?>">Title <?= $req ?></label>
         <input type="text" id="title" name="title" required maxlength="255"
-               value="<?= esc(old('title', '')) ?>"
+               value="<?= esc(old('title', '', false)) ?>"
                placeholder="e.g. Financial Due Diligence" class="<?= $inputCls ?>">
         <?= $err('title') ?>
       </div>
@@ -143,7 +145,7 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
       <div>
         <label for="headline" class="<?= $labelCls ?>">Headline <?= $req ?></label>
         <input type="text" id="headline" name="headline" required maxlength="255"
-               value="<?= esc(old('headline', '')) ?>"
+               value="<?= esc(old('headline', '', false)) ?>"
                placeholder="e.g. Fractional CFO | Strategy &amp; Finance Expert" class="<?= $inputCls ?>">
         <?= $err('headline') ?>
       </div>

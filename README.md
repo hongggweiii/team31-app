@@ -78,13 +78,34 @@ $result = (new \App\Libraries\ProviderEmbedder())->embedShowcase($showcaseId);
 // ['showcase_id' => 12, 'model' => 'mixedbread-ai/mxbai-embed-large-v1', 'dimensions' => 1024, 'embedding' => [1024 floats]]
 ```
 
-`embedShowcase()` reads the saved showcase, its services and its achievements from the database. It throws a `RuntimeException` if the showcase doesn't exist, the service is down, all five fields are empty, or the vector isn't 1024 values long. It doesn't save anything. Calling it after a showcase is created, and pushing the vector into the vector DB, are still to do.
+`embedShowcase()` reads the saved showcase, its services and its achievements from the database. It throws a `RuntimeException` if the showcase doesn't exist, the service is down, all five fields are empty, or the vector isn't 1024 values long. It doesn't save anything.
 
 To check the service end to end against a saved showcase (read-only; prints the model, dimensions, vector length and first values):
 
 ```bash
 php spark embed:showcase <showcase_id>
 ```
+
+### Storing and searching vectors (MariaDB Vector)
+
+Vectors live in the app database itself. MariaDB 11.7+ (Layerbase runs 11.8) has a `VECTOR(n)` column type and a `VECTOR INDEX`, an HNSW graph for approximate nearest-neighbour search, so no separate vector database is needed.
+
+- `showcase_embeddings` and `gig_embeddings`: one row per showcase / gig with `model`, `text_hash` (sha256 of the embedded text) and `embedding VECTOR(1024)`, under a `VECTOR INDEX ... DISTANCE=cosine`. They're separate tables because MariaDB allows one vector index per table, and gigs are embedded differently (query side). Rows cascade-delete with their showcase / gig.
+- Embedding is offline and batched; nothing is embedded when a showcase is saved. Run on a schedule (needs `embedding-service/` up):
+
+  ```bash
+  php spark embed:batch showcases [--size 32] [--all]   # options take a space, not "="
+  ```
+
+  It pages through published showcases, skips any whose `text_hash` is unchanged, sends each page to `POST /embed/providers` in one request and upserts the vectors. Re-running is cheap. `--all` re-embeds everything (e.g. after a model change). Gigs need a gig embedder (the ranker's gig text plus the query prefix) that doesn't exist yet.
+- Search with `App\Libraries\EmbeddingStore`:
+
+  ```php
+  EmbeddingStore::showcases()->nearest($gigVector, 50); // [['id' => 12, 'distance' => 0.21], ...], nearest first
+  ```
+
+  It runs `ORDER BY VEC_DISTANCE_COSINE(embedding, VEC_FromText(?)) LIMIT ?`. MariaDB uses the vector index only for that exact shape, so filter (status, category) on an over-fetched result rather than adding to the query. `php spark embed:similar <showcase_id> [--limit 10]` lists a showcase's nearest neighbours, as a quick read-only check.
+- The test database (SQLite) gets the same tables with `embedding` as TEXT and no index; `EmbeddingStore` refuses to run there.
 
 ## Adding a page
 

@@ -134,4 +134,54 @@ final class ProviderEmbedderTest extends CIUnitTestCase
             ProviderEmbedder::fieldsFromShowcase([], [], []),
         );
     }
+
+    public function testEmbedsManyInOneRequestKeepingKeys(): void
+    {
+        $result = $this->embedder(200, [
+            'model'      => 'm',
+            'dimensions' => 4,
+            'embeddings' => [[0.5, 0.5, 0.5, 0.5], [0.5, -0.5, 0.5, -0.5]],
+        ])->embedMany([12 => ['about_title' => 'First'], 7 => ['about_title' => 'Second', 'rate' => 'ignored']]);
+
+        $this->assertSame('http://localhost:8001/embed/providers', $this->client->curl_options[CURLOPT_URL]);
+        $sent = json_decode($this->client->curl_options[CURLOPT_POSTFIELDS], true)['providers'];
+        $this->assertSame(['First', 'Second'], array_column($sent, 'about_title'));
+        $this->assertSame(ProviderEmbedder::FIELDS, array_keys($sent[1]));
+        $this->assertSame(['model' => 'm', 'embeddings' => [12 => [0.5, 0.5, 0.5, 0.5], 7 => [0.5, -0.5, 0.5, -0.5]]], $result);
+    }
+
+    public function testEmbedManyRejectsAMissingVector(): void
+    {
+        $embedder = $this->embedder(200, ['model' => 'm', 'dimensions' => 4, 'embeddings' => [[1.0, 0.0, 0.0, 0.0]]]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('returned 1 embeddings for 2 providers');
+
+        $embedder->embedMany([['about_title' => 'a'], ['about_title' => 'b']]);
+    }
+
+    public function testEmbedManyRejectsAVectorOfTheWrongSize(): void
+    {
+        $embedder = $this->embedder(200, ['model' => 'm', 'dimensions' => 4, 'embeddings' => [[1.0, 0.0, 0.0]]]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('returned 3 dimensions, expected 4');
+
+        $embedder->embedMany([['about_title' => 'a']]);
+    }
+
+    public function testProviderTextMatchesTheServiceJoin(): void
+    {
+        // embedding.py provider_text: FIELDS in order, empty ones skipped, space-joined.
+        $provider = [
+            'relevant_experience' => "- Led a raise\n- Advised banks",
+            'about_title'         => 'Fractional CFO',
+            'about_description'   => '',
+            'how_i_work'          => 'not embedded',
+        ];
+
+        $this->assertSame("Fractional CFO - Led a raise\n- Advised banks", ProviderEmbedder::providerText($provider));
+        $this->assertSame(hash('sha256', ProviderEmbedder::providerText($provider)), ProviderEmbedder::textHash($provider));
+        $this->assertNotSame(ProviderEmbedder::textHash($provider), ProviderEmbedder::textHash(['about_title' => 'Fractional CFO']));
+    }
 }
