@@ -4,8 +4,11 @@ namespace App\Controllers;
 
 use App\Models\CategoryModel;
 use App\Models\GigModel;
+use App\Libraries\MatcherClient;
 use App\Models\SpecialityModel;
+use CodeIgniter\Exceptions\PageNotFoundException;
 use CodeIgniter\HTTP\RedirectResponse;
+use RuntimeException;
 
 /**
  * Hirers post gigs here; the route is behind Shield's session filter.
@@ -62,6 +65,30 @@ class Gigs extends BaseController
                 ->with('errors', $gigs->errors() ?: ['gig' => 'Your gig could not be saved. Please try again.']);
         }
 
-        return redirect()->to(url_to('gig-new'))->with('message', 'Your gig has been posted.');
+        return redirect()->to(url_to('gig-matches', $gigId))->with('message', 'Your gig has been posted.');
+    }
+
+    /**
+     * The showcases that best match one of the hirer's gigs. matcher/ embeds the
+     * gig live and ranks every published showcase with the ranker's pipeline,
+     * within MatcherClient's 5 s timeout; it saves the gig's vector afterwards.
+     */
+    public function matches(int $gigId): string
+    {
+        $gigs = new GigModel();
+        $gig  = $gigs->find($gigId);
+        if ($gig === null || (string) $gig['user_id'] !== (string) auth()->id()) {
+            throw PageNotFoundException::forPageNotFound();
+        }
+
+        $matches = null;
+
+        try {
+            $matches = service('matcherClient')->match(MatcherClient::gigRequest($gig, $gigs->rankerTaxonomy($gigId)));
+        } catch (RuntimeException $e) {
+            log_message('error', 'Matching gig {id} failed: {message}', ['id' => $gigId, 'message' => $e->getMessage()]);
+        }
+
+        return view('gig-matches', ['gig' => $gig, 'matches' => $matches]);
     }
 }

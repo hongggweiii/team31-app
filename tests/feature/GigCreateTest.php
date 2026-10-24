@@ -79,10 +79,10 @@ final class GigCreateTest extends CIUnitTestCase
 
         $result = $this->actingAs($user)->post('create-gig', $this->validInput());
 
-        $result->assertRedirectTo(url_to('gig-new'));
+        $gig = (new GigModel())->first();
+        $result->assertRedirectTo(url_to('gig-matches', $gig['id']));
         $result->assertSessionHas('message', 'Your gig has been posted.');
 
-        $gig = (new GigModel())->first();
         $this->assertSame((string) $user->id, (string) $gig['user_id']);
         $this->assertSame('Interim CFO', $gig['title']);
         $this->assertSame('Lead finance for six months.', $gig['summary']);

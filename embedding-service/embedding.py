@@ -1,17 +1,20 @@
 """
-Provider profile -> embedding, copied from the ranker repo so the web app
-produces exactly the vectors the ranker was built and evaluated on.
+Provider profile / gig -> embedding, copied from the ranker repo so the web
+app produces exactly the vectors the ranker was built and evaluated on.
 
-    provider_text                       ranker/pipeline/corpus.py
-    BASE_MODEL_NAME, _get_model,
-    _truncate_and_normalize, encode_docs ranker/pipeline/retrieval_dense.py
+    provider_text, hirer_text           ranker/pipeline/corpus.py
+    BASE_MODEL_NAME, QUERY_PREFIX_GENERIC,
+    _get_model, _truncate_and_normalize,
+    encode_docs, encode_queries         ranker/pipeline/retrieval_dense.py
 
 Keep those copies in sync with the ranker -- any change to the field list,
-field order, model or normalisation changes every vector, and existing
+field order, model, prefix or normalisation changes every vector, and existing
 vectors would need re-embedding.
 
-Providers are the *documents* side of mxbai-embed-large-v1's asymmetric
-setup, so they get no instruction prefix (only gig queries do).
+mxbai-embed-large-v1 is asymmetric: providers are the *documents* side and get
+no instruction prefix; gigs are the *query* side and get QUERY_PREFIX_GENERIC
+(the prefix the shipped ranker's dense leg used -- features.py calls
+encode_queries with its default).
 
 EMBED_DIM is the full 1024-dim output -- what the shipped ranker's dense leg
 used (features.py --dense-dim default). The model is Matryoshka-trained, so a
@@ -23,6 +26,7 @@ from sentence_transformers import SentenceTransformer
 
 BASE_MODEL_NAME = "mixedbread-ai/mxbai-embed-large-v1"
 EMBED_DIM = 1024
+QUERY_PREFIX_GENERIC = "Represent this sentence for searching relevant passages: "
 
 _model_cache: dict[str, SentenceTransformer] = {}
 
@@ -50,6 +54,17 @@ def provider_text(p: dict) -> str:
     return " ".join(x for x in parts if x)
 
 
+def hirer_text(h: dict) -> str:
+    """Hirer gig posting -> one query text blob (this is what would get
+    embedded live at /match time per CLAUDE.md)."""
+    parts = [
+        h.get("hire_title"),
+        h.get("hire_description"),
+        h.get("hire_description_additional_notes"),
+    ]
+    return " ".join(x for x in parts if x)
+
+
 def _truncate_and_normalize(vecs: np.ndarray, truncate_dim: int | None) -> np.ndarray:
     if truncate_dim is not None:
         vecs = vecs[:, :truncate_dim]
@@ -64,6 +79,14 @@ def encode_docs(texts: list[str], model_name: str = BASE_MODEL_NAME) -> np.ndarr
     return model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
 
+def encode_queries(
+    texts: list[str], model_name: str = BASE_MODEL_NAME, query_prefix: str = QUERY_PREFIX_GENERIC,
+) -> np.ndarray:
+    """Batch-encode query texts (with the asymmetric instruction prefix)."""
+    model = _get_model(model_name)
+    return model.encode([query_prefix + t for t in texts], convert_to_numpy=True, show_progress_bar=False)
+
+
 def embed_provider(p: dict) -> list[float]:
     """One provider profile -> unit-length EMBED_DIM vector (cosine-ready)."""
     raw = encode_docs([provider_text(p)])
@@ -73,4 +96,11 @@ def embed_provider(p: dict) -> list[float]:
 def embed_providers(ps: list[dict]) -> list[list[float]]:
     """Many provider profiles in one encode call -> unit-length vectors, in order."""
     raw = encode_docs([provider_text(p) for p in ps])
+    return _truncate_and_normalize(raw, EMBED_DIM).tolist()
+
+
+def embed_gigs(gs: list[dict]) -> list[list[float]]:
+    """Many gigs (query side, with the instruction prefix) in one encode call ->
+    unit-length vectors, in order."""
+    raw = encode_queries([hirer_text(g) for g in gs])
     return _truncate_and_normalize(raw, EMBED_DIM).tolist()

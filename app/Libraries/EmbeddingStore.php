@@ -38,7 +38,7 @@ class EmbeddingStore
      *
      * @param list<int> $ids
      *
-     * @return array<int, array{model: string, text_hash: string}> Only ids that have a vector
+     * @return array<int, array{model: string, text_hash: string, has_fields: bool}> Only ids that have a vector
      */
     public function stored(array $ids): array
     {
@@ -47,9 +47,10 @@ class EmbeddingStore
         }
 
         $stored = [];
-        $rows   = $this->db->table($this->table)->select("{$this->key}, model, text_hash")->whereIn($this->key, $ids)->get()->getResultArray();
+        $rows   = $this->db->table($this->table)->select("{$this->key}, model, text_hash, fields_json IS NOT NULL AS has_fields", false)
+            ->whereIn($this->key, $ids)->get()->getResultArray();
         foreach ($rows as $row) {
-            $stored[(int) $row[$this->key]] = ['model' => $row['model'], 'text_hash' => $row['text_hash']];
+            $stored[(int) $row[$this->key]] = ['model' => $row['model'], 'text_hash' => $row['text_hash'], 'has_fields' => (bool) $row['has_fields']];
         }
 
         return $stored;
@@ -58,10 +59,12 @@ class EmbeddingStore
     /**
      * Inserts or replaces vectors in one statement.
      *
-     * @param array<int, list<float>> $embeddings Keyed by showcase / gig id
-     * @param array<int, string>      $textHashes Keyed like $embeddings
+     * @param array<int, list<float>>            $embeddings Keyed by showcase / gig id
+     * @param array<int, string>                 $textHashes Keyed like $embeddings
+     * @param array<int, array<string, mixed>>   $fields     Keyed like $embeddings: the ranker-format record each
+     *                                                      vector was embedded from, stored as fields_json
      */
-    public function saveMany(string $model, array $embeddings, array $textHashes): void
+    public function saveMany(string $model, array $embeddings, array $textHashes, array $fields = []): void
     {
         if ($embeddings === []) {
             return;
@@ -72,14 +75,23 @@ class EmbeddingStore
         $rows     = [];
         $bindings = [];
         foreach ($embeddings as $id => $vector) {
-            $rows[] = '(?, ?, ?, VEC_FromText(?), ?, ?)';
-            array_push($bindings, (int) $id, $model, $textHashes[$id], json_encode(array_map('floatval', $vector)), $now, $now);
+            $rows[] = '(?, ?, ?, ?, VEC_FromText(?), ?, ?)';
+            array_push(
+                $bindings,
+                (int) $id,
+                $model,
+                $textHashes[$id],
+                isset($fields[$id]) ? json_encode($fields[$id], JSON_UNESCAPED_UNICODE) : null,
+                json_encode(array_map('floatval', $vector)),
+                $now,
+                $now,
+            );
         }
 
         $this->db->query(
-            "INSERT INTO {$this->db->prefixTable($this->table)} ({$this->key}, model, text_hash, embedding, created_at, updated_at)
+            "INSERT INTO {$this->db->prefixTable($this->table)} ({$this->key}, model, text_hash, fields_json, embedding, created_at, updated_at)
              VALUES " . implode(', ', $rows) . '
-             ON DUPLICATE KEY UPDATE model = VALUES(model), text_hash = VALUES(text_hash),
+             ON DUPLICATE KEY UPDATE model = VALUES(model), text_hash = VALUES(text_hash), fields_json = VALUES(fields_json),
                  embedding = VALUES(embedding), updated_at = VALUES(updated_at)',
             $bindings,
         );
