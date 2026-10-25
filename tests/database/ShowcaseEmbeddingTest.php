@@ -71,7 +71,7 @@ final class ShowcaseEmbeddingTest extends CIUnitTestCase
                 'about_description'            => 'I drive transformation.',
                 'services_offered_title'       => 'Due diligence; Valuation',
                 'services_offered_description' => 'Buy-side reviews',
-                'relevant_experience'          => "- Advised banks\n- Led a S\$50m raise",
+                'relevant_experience'          => 'Advised banks Led a S$50m raise',
             ]),
             $this->client->curl_options[CURLOPT_POSTFIELDS],
         );

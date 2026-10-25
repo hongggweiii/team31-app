@@ -62,6 +62,7 @@ POOL_SIZE = 50         # features.py --top-k: the candidate pool the ranker was 
 DENSE_DIM = 1024       # features.py --dense-dim default
 REFRESH_SECONDS = 30   # how often the background thread checks MariaDB for changed showcases
 EMBED_TIMEOUT = 3      # seconds for embedding-service, inside the caller's 5 s
+KEEP_WARM_SECONDS = 120  # how often an idle embedding-service gets a tiny request (see warm_embedding_service)
 GIG_KEY = "gig"        # TagMatcher keys gigs by id; one gig is scored at a time
 # API_IO_SPEC.md "Known-dead fields": the shipped model was trained with these zeroed,
 # so they are always sent as 0.0 (as serve.py does) -- live values, even where the data
@@ -327,10 +328,26 @@ def save_gig_embedding(gig: dict, vector: np.ndarray, model_name: str) -> None:
 state = {"catalogue": None, "version": None}
 
 
+def warm_embedding_service() -> None:
+    """Embeds a dummy gig, outside any request. An embedding-service that has sat idle
+    for a long while (its model paged out) can take ~4 s on its next call, more than
+    EMBED_TIMEOUT, so the next real gig would get a 503. Called at startup and then
+    every KEEP_WARM_SECONDS. Failures are logged: matching reports them anyway."""
+    try:
+        post_json("embed/gigs", {"gigs": [{"hire_title": "warm-up", "hire_description": "warm-up"}]}, 30)
+    except HTTPException as e:
+        log.warning("embedding-service warm-up failed: %s", e.detail)
+
+
 def refresh_forever() -> None:
-    """Background thread: reload the catalogue when MariaDB changed, so no request waits on it."""
+    """Background thread: reload the catalogue when MariaDB changed, so no request waits on
+    it, and keep embedding-service warm."""
+    warmed = time.monotonic()
     while True:
         time.sleep(REFRESH_SECONDS)
+        if time.monotonic() - warmed >= KEEP_WARM_SECONDS:
+            warm_embedding_service()
+            warmed = time.monotonic()
         try:
             version = catalogue_version()
             if version != state["version"]:
@@ -390,6 +407,7 @@ async def lifespan(_app: FastAPI):
     else:
         state["catalogue"], state["version"] = load_catalogue(), catalogue_version()
         threading.Thread(target=refresh_forever, daemon=True).start()
+    warm_embedding_service()
     log.info("matching against %d providers (%s)", len(state["catalogue"].providers), RANKER or "MariaDB showcases")
     yield
 

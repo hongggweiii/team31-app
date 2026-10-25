@@ -132,7 +132,8 @@ class ProviderEmbedder
      *   about_description            <- about (Bio)
      *   services_offered_title       <- every service title, "; "-separated
      *   services_offered_description <- every service description
-     *   relevant_experience          <- achievements, one "- " line each (the ranker data's format)
+     *   relevant_experience          <- achievements as one paragraph, space-separated (the ranker
+     *                                   data's format: plain sentences, no bullets or line breaks)
      *
      * title, years_experience, credentials (which the ranker also leaves out),
      * availability, rate, how_i_work, skills, taxonomy and documents are not embedded.
@@ -146,15 +147,6 @@ class ProviderEmbedder
      */
     public static function fieldsFromShowcase(array $showcase, array $services, array $achievements): array
     {
-        $bullets = [];
-        foreach ($achievements as $achievement) {
-            foreach (explode("\n", self::plainText($achievement)) as $line) {
-                if ($line !== '') {
-                    $bullets[] = str_starts_with($line, '- ') ? $line : '- ' . $line;
-                }
-            }
-        }
-
         $nonEmpty = static fn (array $values): array => array_values(array_filter($values, static fn (string $v): bool => $v !== ''));
 
         return [
@@ -162,7 +154,7 @@ class ProviderEmbedder
             'about_description'            => self::plainText($showcase['about'] ?? null),
             'services_offered_title'       => implode('; ', $nonEmpty(array_map(static fn (array $s): string => trim((string) ($s['title'] ?? '')), $services))),
             'services_offered_description' => implode("\n", $nonEmpty(array_map(static fn (array $s): string => self::plainText($s['description'] ?? null), $services))),
-            'relevant_experience'          => implode("\n", $bullets),
+            'relevant_experience'          => implode(' ', $nonEmpty(array_map(static fn (?string $a): string => str_replace("\n", ' ', self::plainText($a)), $achievements))),
         ];
     }
 

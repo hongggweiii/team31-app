@@ -123,7 +123,7 @@ final class ProviderEmbedderTest extends CIUnitTestCase
             'about_description'            => "I drive transformation.\nSecond para & more",
             'services_offered_title'       => 'Due diligence; Valuation; Modelling',
             'services_offered_description' => "Buy-side reviews\n- DCF\n- LBO",
-            'relevant_experience'          => "- Advised banks\n- Led a S\$50m raise",
+            'relevant_experience'          => 'Advised banks - Led a S$50m raise',
         ], $fields);
     }
 
