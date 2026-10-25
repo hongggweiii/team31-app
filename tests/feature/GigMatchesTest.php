@@ -13,7 +13,7 @@ use CodeIgniter\Test\DatabaseTestTrait;
 use CodeIgniter\Test\FeatureTestTrait;
 use Config\Services;
 use RuntimeException;
-use Tests\Support\LegacyTaxonomyTrait;
+use Tests\Support\TaxonomyFixtureTrait;
 
 /**
  * The live matches page a hirer lands on after posting a gig. matcher/ is
@@ -26,7 +26,7 @@ final class GigMatchesTest extends CIUnitTestCase
     use AuthenticationTesting;
     use DatabaseTestTrait;
     use FeatureTestTrait;
-    use LegacyTaxonomyTrait;
+    use TaxonomyFixtureTrait;
 
     protected $namespace = null; // run App and Shield migrations
     protected $refresh   = true;
@@ -43,12 +43,14 @@ final class GigMatchesTest extends CIUnitTestCase
     {
         parent::setUp();
 
-        $this->createLegacyTaxonomy();
+        $this->loadTaxonomy();
         $this->owner = fake(UserModel::class);
         $this->gigId = (new GigModel())->createWithTaxonomy(
             ['user_id' => $this->owner->id, 'title' => 'Interim CFO', 'summary' => 'Lead finance for six months.'],
-            ['3', '1'],
-            ['20', '10', '11'],
+            [
+                'specialisations' => [$this->specId('Financial Services', 'Project Management'), $this->specId('Accountancy', 'Tax'), $this->specId('Accountancy', 'Assurance')],
+                'skills'          => [$this->specId('Accountancy', 'Assurance') => [$this->skillId('Audit Compliance')]],
+            ],
         );
 
         $this->matcher = new class () extends MatcherClient {
@@ -66,13 +68,6 @@ final class GigMatchesTest extends CIUnitTestCase
             }
         };
         Services::injectMock('matcherClient', $this->matcher);
-    }
-
-    protected function tearDown(): void
-    {
-        $this->dropLegacyTaxonomy();
-
-        parent::tearDown();
     }
 
     private static function response(): array
@@ -99,12 +94,12 @@ final class GigMatchesTest extends CIUnitTestCase
             'hire_description' => 'Lead finance for six months.',
             'industry'         => null,
             'taxonomy'         => [
-                ['name' => 'Finance', 'group' => null, 'specialisations' => [
-                    ['name' => 'Due Diligence', 'search_tag' => 'Due Diligence (Finance)', 'skills' => []],
-                    ['name' => 'Valuation', 'search_tag' => 'Valuation (Finance)', 'skills' => []],
+                ['name' => 'Accountancy', 'group' => null, 'specialisations' => [
+                    ['name' => 'Assurance', 'search_tag' => 'Assurance (Accountancy)', 'skills' => ['Audit Compliance']],
+                    ['name' => 'Tax', 'search_tag' => 'Tax (Accountancy)', 'skills' => []],
                 ]],
-                ['name' => 'Fund Raising', 'group' => null, 'specialisations' => [
-                    ['name' => 'Seed Rounds', 'search_tag' => 'Seed Rounds (Fund Raising)', 'skills' => []],
+                ['name' => 'Financial Services', 'group' => null, 'specialisations' => [
+                    ['name' => 'Project Management', 'search_tag' => 'Project Management (Financial Services)', 'skills' => []],
                 ]],
             ],
             'top_k' => 10,

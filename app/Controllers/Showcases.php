@@ -3,9 +3,8 @@
 namespace App\Controllers;
 
 use App\Libraries\RichText;
-use App\Models\CategoryModel;
+use App\Libraries\Taxonomy;
 use App\Models\ShowcaseModel;
-use App\Models\SpecialityModel;
 use CodeIgniter\HTTP\RedirectResponse;
 
 /**
@@ -14,18 +13,20 @@ use CodeIgniter\HTTP\RedirectResponse;
 class Showcases extends BaseController
 {
     /** Quill fields; cleaned before validation so an empty editor counts as blank. */
-    private const RICH_TEXT_FIELDS = ['credentials', 'about', 'availability', 'rate', 'how_i_work'];
+    private const RICH_TEXT_FIELDS = ['about', 'how_i_work'];
 
     private const DOCUMENT_EXTENSIONS = 'pdf,doc,docx,ppt,pptx,jpg,jpeg,png';
 
     private const MAX_SKILL_LENGTH = 50;
 
+    private const MAX_GROUP_NAME_LENGTH = 100;
+
     public function new(): string
     {
         return view('create-profile', [
-            'categoryGroups'     => (new CategoryModel())->activeByService(),
-            'specialisations'    => (new SpecialityModel())->activeByCategory(),
+            'taxonomy'           => (new Taxonomy())->tree(),
             'documentCategories' => ShowcaseModel::DOCUMENT_CATEGORIES,
+            'limits'             => ShowcaseModel::LIMITS,
         ]);
     }
 
@@ -33,24 +34,17 @@ class Showcases extends BaseController
     {
         $data = $this->normalise($this->request->getPost());
 
-        $categoryIds        = array_keys((new CategoryModel())->activeOptions());
-        $specialityCategory = (new SpecialityModel())->activeCategoryMap();
-
         $rules = [
             'name'              => ['label' => 'Name', 'rules' => 'required|max_length[150]'],
             'title'             => ['label' => 'Title', 'rules' => 'required|max_length[255]'],
-            'credentials'       => ['label' => 'Credentials', 'rules' => 'permit_empty'],
+            'years_experience'  => ['label' => 'Years of Experience', 'rules' => 'permit_empty|is_natural|less_than_equal_to[60]'],
+            'credentials.*'     => ['label' => 'Credential', 'rules' => 'max_length[255]'],
             'headline'          => ['label' => 'Headline', 'rules' => 'required|max_length[255]'],
             'about'             => ['label' => 'Bio', 'rules' => 'required'],
-            'categories'        => ['label' => 'Category', 'rules' => 'required|is_array'],
-            'categories.*'      => ['label' => 'Category', 'rules' => 'in_list[' . implode(',', $categoryIds) . ']'],
-            'specialisations'   => ['label' => 'Specialisation', 'rules' => 'required|is_array'],
-            'specialisations.*' => ['label' => 'Specialisation', 'rules' => 'in_list[' . implode(',', array_keys($specialityCategory)) . ']'],
-            'availability'      => ['label' => 'Availability', 'rules' => 'permit_empty'],
-            'rate'              => ['label' => 'Rate', 'rules' => 'permit_empty'],
+            'availability'      => ['label' => 'Availability', 'rules' => 'permit_empty|max_length[255]'],
+            'rate'              => ['label' => 'Rate', 'rules' => 'permit_empty|max_length[255]'],
             'services'          => ['label' => 'Services I offer', 'rules' => 'required|is_array'],
             'services.*.title'  => ['label' => 'Service Title', 'rules' => 'required|max_length[255]'],
-            'skill_groups.*.name' => ['label' => 'Technical proficiency category', 'rules' => 'required|max_length[100]'],
             'how_i_work'        => ['label' => 'How I Work', 'rules' => 'permit_empty'],
             'terms'             => ['label' => 'Terms of Service', 'rules' => 'required', 'errors' => ['required' => 'Please accept the Terms of Service.']],
         ];
@@ -72,24 +66,34 @@ class Showcases extends BaseController
             }
         }
 
-        if (! $this->validateData($data, $rules)) {
-            return redirect()->back()->withInput();
-        }
+        $valid = $this->validateData($data, $rules);
 
-        // Cross-field checks the rule syntax can't express.
-        $errors = [];
-        $parents = array_map(static fn ($id): string => (string) $specialityCategory[$id], $data['specialisations']);
-        if (array_diff($parents, $data['categories']) !== []) {
-            $errors['specialisations'] = 'Each specialisation must belong to one of the chosen categories.';
+        // Checks the rule syntax can't express. Run whether or not the rules
+        // passed, so every problem is reported at once.
+        $taxonomy = (new Taxonomy())->check($data['categories'] ?? [], $data['specialisations'] ?? [], $data['skills'] ?? []);
+        $errors   = $taxonomy['errors'];
+        $labels = ['credentials' => 'credentials', 'services' => 'services', 'achievements' => 'achievements', 'skill_groups' => 'technical proficiency categories'];
+        foreach ($labels as $field => $label) {
+            if (count($data[$field]) > ShowcaseModel::LIMITS[$field]) {
+                $errors[$field] = 'You can add at most ' . ShowcaseModel::LIMITS[$field] . " {$label}.";
+            }
         }
+        // Checked per group rather than as a skill_groups.*.name rule: a wildcard
+        // rule still runs when the (optional) section is empty, and fails required.
         foreach ($data['skill_groups'] as $i => $group) {
-            if ($group['skills'] === []) {
+            if ($group['name'] === '') {
+                $errors["skill_groups.{$i}.name"] = 'Name the category for these skills.';
+            } elseif (mb_strlen($group['name']) > self::MAX_GROUP_NAME_LENGTH) {
+                $errors["skill_groups.{$i}.name"] = 'Category names can be at most ' . self::MAX_GROUP_NAME_LENGTH . ' characters.';
+            } elseif ($group['skills'] === []) {
                 $errors["skill_groups.{$i}.skills"] = 'Add at least one skill to "' . $group['name'] . '".';
+            } elseif (count($group['skills']) > ShowcaseModel::LIMITS['skills']) {
+                $errors["skill_groups.{$i}.skills"] = 'Each category can have at most ' . ShowcaseModel::LIMITS['skills'] . ' skills.';
             } elseif (max(array_map('mb_strlen', $group['skills'])) > self::MAX_SKILL_LENGTH) {
                 $errors["skill_groups.{$i}.skills"] = 'Skills can be at most ' . self::MAX_SKILL_LENGTH . ' characters.';
             }
         }
-        if ($errors !== []) {
+        if (! $valid || $errors !== []) {
             return redirect()->back()->withInput()->with('errors', $errors);
         }
 
@@ -124,7 +128,7 @@ class Showcases extends BaseController
                 'name'         => $data['name'],
                 'photo_path'   => $stored['photo'] ?? null,
                 'title'        => $data['title'],
-                'credentials'  => $nullIfBlank($data['credentials']),
+                'years_experience' => $data['years_experience'] !== '' ? (int) $data['years_experience'] : null,
                 'headline'     => $data['headline'],
                 'about'        => $data['about'],
                 'availability' => $nullIfBlank($data['availability']),
@@ -132,8 +136,8 @@ class Showcases extends BaseController
                 'how_i_work'   => $nullIfBlank($data['how_i_work']),
             ],
             [
-                'categories'   => array_map('intval', $data['categories']),
-                'specialities' => array_map('intval', $data['specialisations']),
+                'credentials'  => $data['credentials'],
+                'taxonomy'     => $taxonomy['selection'],
                 'services'     => array_map(static fn (array $s): array => [
                     'title'       => $s['title'],
                     'description' => $nullIfBlank($s['detail']),
@@ -163,15 +167,13 @@ class Showcases extends BaseController
     private function normalise(array $post): array
     {
         $data = $post;
-        foreach (['name', 'title', 'headline'] as $field) {
+        foreach (['name', 'title', 'headline', 'years_experience', 'availability', 'rate'] as $field) {
             $data[$field] = trim((string) ($post[$field] ?? ''));
         }
         foreach (self::RICH_TEXT_FIELDS as $field) {
             $data[$field] = RichText::clean($post[$field] ?? '');
         }
-        foreach (['categories', 'specialisations'] as $field) {
-            $data[$field] = array_values(array_unique(array_map('strval', array_filter((array) ($post[$field] ?? []), 'is_scalar'))));
-        }
+        $data['credentials'] = $this->uniqueStrings((array) ($post['credentials'] ?? []));
 
         $boxes = static fn (string $field): array => array_values(array_filter((array) ($post[$field] ?? []), 'is_array'));
 

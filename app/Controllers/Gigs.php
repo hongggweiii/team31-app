@@ -2,10 +2,9 @@
 
 namespace App\Controllers;
 
-use App\Models\CategoryModel;
 use App\Models\GigModel;
 use App\Libraries\MatcherClient;
-use App\Models\SpecialityModel;
+use App\Libraries\Taxonomy;
 use CodeIgniter\Exceptions\PageNotFoundException;
 use CodeIgniter\HTTP\RedirectResponse;
 use RuntimeException;
@@ -15,49 +14,63 @@ use RuntimeException;
  */
 class Gigs extends BaseController
 {
+    /** Longest engagement a hirer can enter, in weeks. */
+    private const MAX_DURATION_WEEKS = 52;
+
     public function new(): string
     {
         return view('create-gig', [
-            'categoryGroups'  => (new CategoryModel())->activeByService(),
-            'specialisations' => (new SpecialityModel())->activeByCategory(),
+            'taxonomy' => (new Taxonomy())->tree(),
         ]);
     }
 
     public function create(): RedirectResponse
     {
-        $gigs               = new GigModel();
-        $categoryIds        = array_keys((new CategoryModel())->activeOptions());
-        $specialityCategory = (new SpecialityModel())->activeCategoryMap();
+        $gigs = new GigModel();
 
         $rules = [
-            'gig_title'         => ['label' => 'Gig Title', 'rules' => 'required|max_length[500]'],
-            'gig_summary'       => ['label' => 'Short Gig Description', 'rules' => 'required'],
-            'categories'        => ['label' => 'Category', 'rules' => 'required|is_array'],
-            'categories.*'      => ['label' => 'Category', 'rules' => 'in_list[' . implode(',', $categoryIds) . ']'],
-            'specialisations'   => ['label' => 'Specialisation', 'rules' => 'required|is_array'],
-            'specialisations.*' => ['label' => 'Specialisation', 'rules' => 'in_list[' . implode(',', array_keys($specialityCategory)) . ']'],
+            'gig_title'          => ['label' => 'Gig Title', 'rules' => 'required|max_length[500]'],
+            'gig_summary'        => ['label' => 'Short Gig Description', 'rules' => 'required'],
+            'duration_weeks_min' => ['label' => 'Minimum duration', 'rules' => 'permit_empty|is_natural_no_zero|less_than_equal_to[' . self::MAX_DURATION_WEEKS . ']'],
+            'duration_weeks_max' => ['label' => 'Maximum duration', 'rules' => 'permit_empty|is_natural_no_zero|less_than_equal_to[' . self::MAX_DURATION_WEEKS . ']'],
+            'additional_notes'   => ['label' => 'Additional Notes', 'rules' => 'permit_empty|max_length[2000]'],
         ];
 
-        if (! $this->validate($rules)) {
-            return redirect()->back()->withInput();
+        // Checked together so every problem is reported at once.
+        $valid    = $this->validate($rules);
+        $taxonomy = (new Taxonomy())->check(
+            $this->request->getPost('categories'),
+            $this->request->getPost('specialisations'),
+            $this->request->getPost('skills'),
+        );
+        if (! $valid || $taxonomy['errors'] !== []) {
+            return redirect()->back()->withInput()->with('errors', $taxonomy['errors']);
         }
 
         $data = $this->validator->getValidated();
 
-        $parents = array_map(static fn ($id): string => (string) $specialityCategory[$id], $data['specialisations']);
-        if (array_diff($parents, array_map('strval', $data['categories'])) !== []) {
+        // One duration given means a fixed length: schema v2 stores it as both
+        // the minimum and the maximum.
+        $minWeeks = ($data['duration_weeks_min'] ?? '') !== '' ? (int) $data['duration_weeks_min'] : null;
+        $maxWeeks = ($data['duration_weeks_max'] ?? '') !== '' ? (int) $data['duration_weeks_max'] : null;
+        $minWeeks ??= $maxWeeks;
+        $maxWeeks ??= $minWeeks;
+        if ($minWeeks > $maxWeeks) {
             return redirect()->back()->withInput()
-                ->with('errors', ['specialisations' => 'Each specialisation must belong to one of the chosen categories.']);
+                ->with('errors', ['duration_weeks_max' => 'The maximum duration can\'t be shorter than the minimum.']);
         }
+        $notes = trim((string) ($data['additional_notes'] ?? ''));
 
         $gigId = $gigs->createWithTaxonomy(
             [
-                'user_id' => auth()->id(),
-                'title'   => trim($data['gig_title']),
-                'summary' => trim($data['gig_summary']),
+                'user_id'            => auth()->id(),
+                'title'              => trim($data['gig_title']),
+                'summary'            => trim($data['gig_summary']),
+                'duration_weeks_min' => $minWeeks,
+                'duration_weeks_max' => $maxWeeks,
+                'additional_notes'   => $notes !== '' ? $notes : null,
             ],
-            $data['categories'],
-            $data['specialisations']
+            $taxonomy['selection'],
         );
 
         if ($gigId === false) {

@@ -12,9 +12,10 @@ use RuntimeException;
  * Offline batch embedding: embeds published showcases through
  * embedding-service/ in pages and stores the vectors in showcase_embeddings,
  * with the ranker-format record each was embedded from (fields_json, which
- * matcher/ reads). Showcases whose embedded text is unchanged since the last
- * run, and that already have that record, are skipped, so it is safe to run on
- * a schedule.
+ * matcher/ reads). Showcases whose embedded text and stored record are both
+ * unchanged since the last run are skipped, so it is safe to run on a schedule.
+ * (The record also carries fields that aren't embedded, such as
+ * years_experience, so a change there re-saves it.)
  */
 class EmbedBatch extends BaseCommand
 {
@@ -65,7 +66,8 @@ class EmbedBatch extends BaseCommand
             foreach ($fields as $id => $provider) {
                 if (ProviderEmbedder::providerText($provider) === '') {
                     $counts['empty']++;
-                } elseif (($stored[$id]['text_hash'] ?? null) === ProviderEmbedder::textHash($provider) && $stored[$id]['has_fields']) {
+                } elseif (($stored[$id]['text_hash'] ?? null) === ProviderEmbedder::textHash($provider)
+                    && $stored[$id]['fields_json'] === EmbeddingStore::encodeFields($provider)) {
                     $counts['unchanged']++;
                 } else {
                     $todo[$id] = $provider;

@@ -64,6 +64,8 @@ Showcases and gigs are turned into vectors for matching by a small Python servic
 
 Nothing else is embedded: not Title, Credentials (which the ranker also leaves out), Availability, Rate, How I work, Technical proficiency, categories or documents.
 
+The stored record (`fields_json`) also carries the showcase's `years_experience`, which is not embedded: `matcher/` reads it for the ranker's `exp_years` feature. `embed:batch` re-saves a showcase whenever its record changes, even if the embedded text didn't.
+
 A gig is embedded from the ranker's three gig fields, in the same way, live by `matcher/` when it is matched (see below). They come from the gig:
 
 | Ranker field | From the gig |
@@ -170,7 +172,18 @@ To update to a newer ranker: copy the same files from `ranker/pipeline/` into `m
 cd matcher && .venv/bin/python check_parity.py --ranker ../../ranker
 ```
 
-The app's categories and specialisations are a different vocabulary from the SkillsFuture tags the ranker was trained on, and gigs carry no skills, so the tag features are computed from category/specialisation overlap only.
+Gigs and showcases are tagged with the same SkillsFuture taxonomy (`sf_v1`) the ranker was trained on, skills included, so all of its tag features (category, specialisation and skill overlap, and `skill_soft`) see real values. The matcher embeds every taxonomy skill name once at startup for `skill_soft` (cached under `matcher/cache/`).
+
+## Taxonomy (SkillsFuture `sf_v1`)
+
+Both forms tag a gig / showcase as the Data team's records do: up to 2 **categories** (SkillsFuture sectors), 1-3 **specialisations** (tracks) under each, and up to 8 **skills** per specialisation, chosen from the skills linked to it. Search tags are `"<specialisation> (<category>)"`, derived rather than stored. `App\Libraries\Taxonomy` serves the picker, enforces those caps and returns a record's tags in the records' / matcher request's shape.
+
+- Tables: `sf_categories` (with `group_name`, the records' `group`, currently always null), `sf_specialisations`, `sf_skills`, `sf_specialisation_skills`. A gig / showcase stores `{gig,showcase}_specialisations` and `{gig,showcase}_skills`; its categories are those specialisations' parents. The client's legacy `categories` / `specialities` tables are no longer used.
+- Load or refresh the taxonomy (additive, safe to re-run):
+
+  ```bash
+  php spark taxonomy:import providers.json hirers.json   # the Data team's tagged records (not kept in the repo)
+  ```
 
 ## Adding a page
 

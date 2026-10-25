@@ -8,8 +8,8 @@ require __DIR__ . '/partials/form-styles.php';
 
 helper('form');
 
-// $categoryGroups ([service => [id => name]]), $specialisations
-// ([category_id => [id => name]]) and $documentCategories are injected by Showcases::new().
+// $taxonomy (App\Libraries\Taxonomy::tree()), $documentCategories and $limits
+// (most boxes per repeatable section) are injected by Showcases::new().
 $errors = array_merge(validation_errors(), (array) session('errors'));
 // Shows the error for $field, or for any of its array items (e.g. "services.0.title").
 $err = static function (string $field) use ($errors): string {
@@ -38,6 +38,7 @@ $editor = static fn (string $name, string $placeholder, bool $required = false, 
 $oldRich = static fn (string $name): string => RichText::clean(old($name, '', false));
 
 $boxes        = static fn (string $field): array => array_values(array_filter((array) old($field, [], false), 'is_array'));
+$oldCredentials = array_values(array_filter((array) old('credentials', [], false), 'is_string'));
 $oldServices  = array_map(static fn (array $s): array => [
     'title'  => (string) ($s['title'] ?? ''),
     'detail' => RichText::clean($s['detail'] ?? ''),
@@ -95,7 +96,7 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
     </div>
   <?php endif; ?>
 
-  <!-- ── photo, name, title, credentials ────────────── -->
+  <!-- ── photo, name, title, experience, credentials ── -->
   <section class="<?= $cardCls ?>">
     <div class="flex flex-col items-center">
       <label for="photo" class="relative cursor-pointer" title="Upload photo">
@@ -127,12 +128,31 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
         <label for="title" class="<?= $labelCls ?>">Title <?= $req ?></label>
         <input type="text" id="title" name="title" required maxlength="255"
                value="<?= esc(old('title', '', false)) ?>"
-               placeholder="e.g. Financial Due Diligence" class="<?= $inputCls ?>">
+               placeholder="e.g. Forensic Accountant" class="<?= $inputCls ?>">
         <?= $err('title') ?>
+        <p class="<?= $hintCls ?>">Your job title in 2–8 words.</p>
+      </div>
+      <div>
+        <label for="years_experience" class="<?= $labelCls ?>">Years of Experience</label>
+        <input type="number" id="years_experience" name="years_experience" min="0" max="60" step="1"
+               value="<?= esc(old('years_experience', '', false)) ?>" placeholder="e.g. 12" class="<?= $inputCls ?> max-w-[8rem]">
+        <?= $err('years_experience') ?>
+        <p class="<?= $hintCls ?>">Years working in your field.</p>
       </div>
       <div>
         <span class="<?= $labelCls ?>">Credentials</span>
-        <?= $editor('credentials', 'Educational Degrees, significant Certificates, Professional Admissions, Awards and other relevant credentials', false, $oldRich('credentials')) ?>
+        <p class="<?= $hintCls ?> mt-0 mb-3">Professional registrations, certifications and memberships, one per box (up to <?= $limits['credentials'] ?>).</p>
+        <?= $err('credentials') ?>
+        <div id="credentials" class="space-y-3">
+          <button type="button" class="js-add text-sm font-semibold text-brand hover:underline">+ Add Another Credential</button>
+        </div>
+        <template id="credential_template">
+          <div class="js-box flex items-center gap-3">
+            <input type="text" name="credentials[__i__]" maxlength="255"
+                   placeholder="e.g. Certified Public Accountant (CPA)" class="<?= $inputCls ?>">
+            <button type="button" class="js-remove text-ink/50 hover:text-brand" aria-label="Remove credential">&times;</button>
+          </div>
+        </template>
       </div>
     </div>
   </section>
@@ -148,11 +168,13 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
                value="<?= esc(old('headline', '', false)) ?>"
                placeholder="e.g. Fractional CFO | Strategy &amp; Finance Expert" class="<?= $inputCls ?>">
         <?= $err('headline') ?>
+        <p class="<?= $hintCls ?>">One line, up to 20 words.</p>
       </div>
       <div>
         <span class="<?= $labelCls ?>">Bio <?= $req ?></span>
         <?= $editor('about', 'Add your bio here...', true, $oldRich('about')) ?>
         <?= $err('about') ?>
+        <p class="<?= $hintCls ?>">About 70–100 words: your specialisation and past roles.</p>
       </div>
     </div>
   </section>
@@ -164,12 +186,18 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
   <section class="<?= $cardCls ?>">
     <div class="space-y-6">
       <div>
-        <h2 class="<?= $sectionCls ?> mb-3">Availability</h2>
-        <?= $editor('availability', 'State availability. E.g. On holiday from ___ to ___. | Committed on Monday, Wednesday & Friday afternoons? | Generally Available by Appointment', false, $oldRich('availability')) ?>
+        <label for="availability" class="<?= $sectionCls ?> mb-3 block">Availability</label>
+        <input type="text" id="availability" name="availability" maxlength="255"
+               value="<?= esc(old('availability', '', false)) ?>"
+               placeholder="e.g. Available from November 2026, 2 days a week" class="<?= $inputCls ?>">
+        <?= $err('availability') ?>
       </div>
       <div>
-        <h2 class="<?= $sectionCls ?> mb-3">Rate</h2>
-        <?= $editor('rate', 'E.g. S$250 per hour, or S$5,000 per project', false, $oldRich('rate')) ?>
+        <label for="rate" class="<?= $sectionCls ?> mb-3 block">Rate</label>
+        <input type="text" id="rate" name="rate" maxlength="255"
+               value="<?= esc(old('rate', '', false)) ?>"
+               placeholder="e.g. From S$3,000 per day" class="<?= $inputCls ?>">
+        <?= $err('rate') ?>
       </div>
     </div>
   </section>
@@ -177,7 +205,7 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
   <!-- ── services I offer ───────────────────────────── -->
   <section class="<?= $cardCls ?>">
     <h2 class="<?= $sectionCls ?>">Services I offer <?= $req ?></h2>
-    <p class="<?= $hintCls ?>">One service per box.</p>
+    <p class="<?= $hintCls ?>">One service per box, best fit first (up to <?= $limits['services'] ?>).</p>
     <?= $err('services') ?>
 
     <div id="services" class="mt-6 grid gap-5 sm:grid-cols-2">
@@ -201,7 +229,7 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
   <!-- ── relevant achievements ──────────────────────── -->
   <section class="<?= $cardCls ?>">
     <h2 class="<?= $sectionCls ?>">Relevant achievements</h2>
-    <p class="<?= $hintCls ?>">One achievement per box.</p>
+    <p class="<?= $hintCls ?>">One outcome you personally achieved per box (up to <?= $limits['achievements'] ?>).</p>
     <?= $err('achievements') ?>
 
     <div id="achievements" class="mt-6 space-y-5">
@@ -221,7 +249,8 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
   <!-- ── technical proficiency ──────────────────────── -->
   <section class="<?= $cardCls ?>">
     <h2 class="<?= $sectionCls ?>">Technical proficiency</h2>
-    <p class="<?= $hintCls ?>">Group your technical skills. Press Enter or comma after each skill.</p>
+    <p class="<?= $hintCls ?>">Group the tools, methods and standards you use (up to <?= $limits['skill_groups'] ?> categories,
+      <?= $limits['skills'] ?> skills each). Press Enter or comma after each skill.</p>
     <?= $err('skill_groups') ?>
 
     <div id="skill_groups" class="mt-6 grid gap-5 sm:grid-cols-2">
@@ -337,12 +366,12 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
   document.querySelectorAll('.js-rte').forEach(initEditor); // template content isn't matched
 
   /* ── chip inputs (technical skills) ────────────── */
-  function initChipBox(box, values) {
+  function initChipBox(box, values, max) {
     var input = box.querySelector('.js-chip-input');
 
     function add(text) {
       text = text.trim();
-      if (!text) return;
+      if (!text || box.querySelectorAll('input[type=hidden]').length >= max) return;
       var exists = Array.prototype.some.call(box.querySelectorAll('input[type=hidden]'), function (i) {
         return i.value.toLowerCase() === text.toLowerCase();
       });
@@ -372,12 +401,16 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
 
   /* ── repeatable boxes ──────────────────────────── */
   // Each box comes from a <template>; "__i__" becomes a unique index. At least
-  // one box is always kept. fill(box, value) restores re-filled input.
-  function repeater(containerId, templateId, values, fill) {
+  // one box is always kept, and the add button hides once there are max.
+  // fill(box, value) restores re-filled input.
+  function repeater(containerId, templateId, values, fill, max) {
     var container = document.getElementById(containerId);
     var addBtn    = container.querySelector('.js-add');
     var tpl       = document.getElementById(templateId);
     var next      = 0;
+
+    function count() { return container.querySelectorAll('.js-box').length; }
+    function refresh() { show(addBtn, count() < max); }
 
     function add(value) {
       addBtn.insertAdjacentHTML('beforebegin', tpl.innerHTML.replace(/__i__/g, String(next++)));
@@ -385,8 +418,10 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
       box.querySelectorAll('.js-rte').forEach(initEditor);
       fill(box, value);
       box.querySelector('.js-remove').addEventListener('click', function () {
-        if (container.querySelectorAll('.js-box').length > 1) box.remove();
+        if (count() > 1) box.remove();
+        refresh();
       });
+      refresh();
       return box;
     }
 
@@ -394,7 +429,7 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
       var box = add();
       (box.querySelector('input[type=text]') || box.querySelector('.ql-editor')).focus();
     });
-    if (values.length) values.forEach(add); else add();
+    if (values.length) values.slice(0, max).forEach(add); else add();
   }
 
   // Re-filled rich text was sanitised server-side (RichText::clean).
@@ -402,16 +437,21 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
     if (html) box.querySelector('.js-rte').quill.clipboard.dangerouslyPasteHTML(html);
   }
 
+  var limits = <?= $json($limits) ?>;
+
+  repeater('credentials', 'credential_template', <?= $json($oldCredentials) ?>, function (box, c) {
+    if (c) box.querySelector('input[type=text]').value = c;
+  }, limits.credentials);
   repeater('services', 'service_template', <?= $json($oldServices) ?>, function (box, s) {
     if (!s) return;
     box.querySelector('input[type=text]').value = s.title;
     paste(box, s.detail);
-  });
-  repeater('achievements', 'achievement_template', <?= $json($oldAchievements) ?>, paste);
+  }, limits.services);
+  repeater('achievements', 'achievement_template', <?= $json($oldAchievements) ?>, paste, limits.achievements);
   repeater('skill_groups', 'skill_group_template', <?= $json($oldSkillGroups) ?>, function (box, g) {
     if (g) box.querySelector('input[type=text]').value = g.name;
-    initChipBox(box.querySelector('.js-chip-box'), g ? g.skills : []);
-  });
+    initChipBox(box.querySelector('.js-chip-box'), g ? g.skills : [], limits.skills);
+  }, limits.skill_groups);
 
   /* ── links: list chosen file names ─────────────── */
   document.querySelectorAll('.js-link-file').forEach(function (input) {

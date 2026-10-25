@@ -61,12 +61,14 @@ class ProviderEmbedder
     }
 
     /**
-     * Maps saved showcases onto the ranker's fields, loading their services and
-     * achievements in two queries for the whole list.
+     * Maps saved showcases onto the ranker's provider records, loading their
+     * services and achievements in two queries for the whole list. Each record
+     * is fieldsFromShowcase() plus years_experience, which is not embedded but
+     * which matcher/ reads from the stored record for its exp_years feature.
      *
      * @param list<array<string, mixed>> $showcases showcases rows
      *
-     * @return array<int, array<string, string>> Keyed by showcase id, values as fieldsFromShowcase()
+     * @return array<int, array<string, int|string|null>> Keyed by showcase id
      */
     public static function showcaseFields(array $showcases): array
     {
@@ -92,7 +94,8 @@ class ProviderEmbedder
         $fields = [];
         foreach ($showcases as $showcase) {
             $id          = (int) $showcase['id'];
-            $fields[$id] = self::fieldsFromShowcase($showcase, $services[$id] ?? [], array_column($achievements[$id] ?? [], 'description'));
+            $fields[$id] = self::fieldsFromShowcase($showcase, $services[$id] ?? [], array_column($achievements[$id] ?? [], 'description'))
+                + ['years_experience' => isset($showcase['years_experience']) ? (int) $showcase['years_experience'] : null];
         }
 
         return $fields;
@@ -131,8 +134,8 @@ class ProviderEmbedder
      *   services_offered_description <- every service description
      *   relevant_experience          <- achievements, one "- " line each (the ranker data's format)
      *
-     * title, credentials (which the ranker also leaves out), availability,
-     * rate, how_i_work, skills, taxonomy and documents are not embedded.
+     * title, years_experience, credentials (which the ranker also leaves out),
+     * availability, rate, how_i_work, skills, taxonomy and documents are not embedded.
      * Rich text is reduced to plain text first.
      *
      * @param array<string, mixed>                                  $showcase     showcases row

@@ -38,7 +38,7 @@ class EmbeddingStore
      *
      * @param list<int> $ids
      *
-     * @return array<int, array{model: string, text_hash: string, has_fields: bool}> Only ids that have a vector
+     * @return array<int, array{model: string, text_hash: string, has_fields: bool, fields_json: ?string}> Only ids that have a vector
      */
     public function stored(array $ids): array
     {
@@ -47,10 +47,15 @@ class EmbeddingStore
         }
 
         $stored = [];
-        $rows   = $this->db->table($this->table)->select("{$this->key}, model, text_hash, fields_json IS NOT NULL AS has_fields", false)
+        $rows   = $this->db->table($this->table)->select("{$this->key}, model, text_hash, fields_json, fields_json IS NOT NULL AS has_fields", false)
             ->whereIn($this->key, $ids)->get()->getResultArray();
         foreach ($rows as $row) {
-            $stored[(int) $row[$this->key]] = ['model' => $row['model'], 'text_hash' => $row['text_hash'], 'has_fields' => (bool) $row['has_fields']];
+            $stored[(int) $row[$this->key]] = [
+                'model'       => $row['model'],
+                'text_hash'   => $row['text_hash'],
+                'has_fields'  => (bool) $row['has_fields'],
+                'fields_json' => $row['fields_json'],
+            ];
         }
 
         return $stored;
@@ -81,7 +86,7 @@ class EmbeddingStore
                 (int) $id,
                 $model,
                 $textHashes[$id],
-                isset($fields[$id]) ? json_encode($fields[$id], JSON_UNESCAPED_UNICODE) : null,
+                isset($fields[$id]) ? self::encodeFields($fields[$id]) : null,
                 json_encode(array_map('floatval', $vector)),
                 $now,
                 $now,
@@ -136,6 +141,17 @@ class EmbeddingStore
         $row = $this->db->table($this->table)->select('VEC_ToText(embedding) AS embedding', false)->where($this->key, $id)->get()->getRowArray();
 
         return $row === null ? null : array_map('floatval', json_decode($row['embedding'], true));
+    }
+
+    /**
+     * A ranker-format record as stored in fields_json. Batches compare against
+     * this to spot records that changed outside the embedded text.
+     *
+     * @param array<string, mixed> $fields
+     */
+    public static function encodeFields(array $fields): string
+    {
+        return json_encode($fields, JSON_UNESCAPED_UNICODE);
     }
 
     private function requireMariaDb(): void
