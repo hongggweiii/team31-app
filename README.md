@@ -60,7 +60,7 @@ Showcases and gigs are turned into vectors for matching by a small Python servic
 | `about_description` | Bio (`about`) |
 | `services_offered_title` | Every service title, `; `-separated |
 | `services_offered_description` | Every service description |
-| `relevant_experience` | Relevant achievements, one `- ` line each |
+| `relevant_experience` | Relevant achievements, joined into one paragraph (the ranker data has no bullets or line breaks) |
 
 Nothing else is embedded: not Title, Credentials (which the ranker also leaves out), Availability, Rate, How I work, Technical proficiency, categories or documents.
 
@@ -109,7 +109,15 @@ Vectors live in the app database itself. MariaDB 11.7+ (Layerbase runs 11.8) has
   php spark embed:batch showcases [--size 32] [--all]   # options take a space, not "="
   ```
 
-  It pages through published showcases, skips any whose `text_hash` is unchanged (and that already have `fields_json`), sends each page to `POST /embed/providers` in one request and upserts the vectors. Re-running is cheap. `--all` re-embeds everything (e.g. after a model change).
+  It pages through published showcases, skips any whose embedded text and stored record (`fields_json`) are unchanged, sends each page to `POST /embed/providers` in one request and upserts the vectors. Re-running is cheap. `--all` re-embeds everything (e.g. after a model change).
+
+  A new or edited showcase can't be matched until this has run, so schedule it, e.g. every 5 minutes with cron (`crontab -e`; use absolute paths, cron has a minimal `PATH`):
+
+  ```cron
+  */5 * * * * cd /path/to/team31-app && /opt/homebrew/bin/php spark embed:batch showcases >> writable/logs/embed-batch.log 2>&1
+  ```
+
+  A run while `embedding-service/` is down only logs the failure; the next run catches up.
 - Gigs are embedded live, inside the match request, and `matcher/` saves the vector to `gig_embeddings` only after it has returned the matches (so saving never counts against the 5 s). Nothing reads `gig_embeddings` during matching; it is kept for later use.
 - Search with `App\Libraries\EmbeddingStore`:
 
@@ -143,7 +151,7 @@ The request and response are the ranker's API contract (`ranker/API_IO_SPEC.md`,
 
 and the response is `{"results": [{"rank", "provider_id", "score", "raw_margin", "provider": {"display_title", "industry", "bio_excerpt"}, "signals": {"retrieval", "business_fit", "taxonomy"}}], "meta": {...}}`. Here `provider_id` is the `showcases.id`. `score` is the ranking score min-maxed to 0-100 per gig (rank 1 is always 100), not a probability; `signals` are the model's actual inputs.
 
-`matcher/` runs the ranker's own pipeline, unchanged: `matcher/pipeline/` holds verbatim copies of the ranker files it needs and the shipped model (`v5tax_tags_xgb.json`), and `matcher/RANKER_VERSION` records the ranker commit they came from. It never embeds showcases: `embed:batch showcases` stores their vectors and the records they were embedded from (`fields_json`) in MariaDB, and the matcher loads them at startup and reloads them in the background when they change (checked every 30 s). A match takes about 0.1-0.5 s (gig embedding plus ranking over ~3,000 showcases); if `embedding-service/` is down it answers 503 and the page says matching is unavailable.
+`matcher/` runs the ranker's own pipeline, unchanged: `matcher/pipeline/` holds verbatim copies of the ranker files it needs and the shipped model (`v5tax_tags_xgb.json`), and `matcher/RANKER_VERSION` records the ranker commit they came from. It never embeds showcases: `embed:batch showcases` stores their vectors and the records they were embedded from (`fields_json`) in MariaDB, and the matcher loads them at startup and reloads them in the background when they change (checked every 30 s). A match takes about 0.1-0.5 s (gig embedding plus ranking over ~3,000 showcases); if `embedding-service/` is down it answers 503 and the page says matching is unavailable. An embedding-service left idle for a long while can take ~4 s on its next call (its model gets paged out), more than the matcher's 3 s budget for it, so the matcher embeds a dummy gig at startup and every 2 minutes to keep it warm.
 
 Run it alongside `php spark serve` and `embedding-service/` (it reads the database and `embedding.baseURL` settings from this `.env`, and writes only to `gig_embeddings`):
 
