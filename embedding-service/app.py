@@ -6,6 +6,8 @@ HTTP wrapper around embedding.py, called by app/Libraries/ProviderEmbedder.php.
                             -> {"model", "dimensions", "embedding": [float x dimensions]}
     POST /embed/providers   body: {"providers": [up to MAX_BATCH of the above]}
                             -> {"model", "dimensions", "embeddings": [[float x dimensions], ...]}, in input order
+    POST /embed/gigs        body: {"gigs": [up to MAX_BATCH of {"hire_title", "hire_description",
+                            "hire_description_additional_notes"}]} -> same shape as /embed/providers
 
 Run (from embedding-service/):
     uvicorn app:app --port 8001
@@ -15,7 +17,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from embedding import BASE_MODEL_NAME, EMBED_DIM, _get_model, embed_provider, embed_providers, provider_text
+from embedding import (
+    BASE_MODEL_NAME, EMBED_DIM, _get_model, embed_gigs, embed_provider, embed_providers, hirer_text,
+    provider_text,
+)
 
 
 @asynccontextmanager
@@ -67,3 +72,25 @@ def embed_providers_route(batch: ProviderBatch):
     if empty:
         raise HTTPException(status_code=422, detail=f"All provider text fields are empty at index {empty}")
     return {"model": BASE_MODEL_NAME, "dimensions": EMBED_DIM, "embeddings": embed_providers(fields)}
+
+
+class Gig(BaseModel):
+    hire_title: str | None = None
+    hire_description: str | None = None
+    hire_description_additional_notes: str | None = None
+
+
+class GigBatch(BaseModel):
+    gigs: list[Gig]
+
+
+# Gigs are the query side: embed_gigs adds the instruction prefix providers don't get.
+@app.post("/embed/gigs")
+def embed_gigs_route(batch: GigBatch):
+    if not 1 <= len(batch.gigs) <= MAX_BATCH:
+        raise HTTPException(status_code=422, detail=f"Send between 1 and {MAX_BATCH} gigs")
+    fields = [g.model_dump() for g in batch.gigs]
+    empty = [i for i, f in enumerate(fields) if not hirer_text(f).strip()]
+    if empty:
+        raise HTTPException(status_code=422, detail=f"All gig text fields are empty at index {empty}")
+    return {"model": BASE_MODEL_NAME, "dimensions": EMBED_DIM, "embeddings": embed_gigs(fields)}

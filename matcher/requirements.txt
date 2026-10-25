@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn>=0.29
+numpy
+pymysql>=1.1
+rank-bm25>=0.2.2      # pipeline/retrieval_bm25.py
+xgboost>=3.4          # v5tax_tags_xgb.json was saved with 3.4.1
+scikit-learn>=1.4     # imported by pipeline/rerank_ltr.py
+sentence-transformers>=3.0  # imported by pipeline/retrieval_dense.py; the model is never loaded by app.py

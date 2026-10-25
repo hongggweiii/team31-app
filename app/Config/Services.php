@@ -2,6 +2,7 @@
 
 namespace Config;
 
+use App\Libraries\MatcherClient;
 use CodeIgniter\Config\BaseService;
 
 /**
@@ -29,4 +30,17 @@ class Services extends BaseService
      *     return new \CodeIgniter\Example();
      * }
      */
+
+    /**
+     * Asks matcher/ for a gig's matching showcases (Gigs::matches). A service so
+     * tests can swap in a fake instead of calling matcher/.
+     */
+    public static function matcherClient(bool $getShared = true): MatcherClient
+    {
+        if ($getShared) {
+            return static::getSharedInstance('matcherClient');
+        }
+
+        return new MatcherClient();
+    }
 }

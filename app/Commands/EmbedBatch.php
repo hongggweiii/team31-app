@@ -10,9 +10,11 @@ use RuntimeException;
 
 /**
  * Offline batch embedding: embeds published showcases through
- * embedding-service/ in pages and stores the vectors in showcase_embeddings.
- * Showcases whose embedded text is unchanged since the last run are skipped,
- * so it is safe to run on a schedule.
+ * embedding-service/ in pages and stores the vectors in showcase_embeddings,
+ * with the ranker-format record each was embedded from (fields_json, which
+ * matcher/ reads). Showcases whose embedded text is unchanged since the last
+ * run, and that already have that record, are skipped, so it is safe to run on
+ * a schedule.
  */
 class EmbedBatch extends BaseCommand
 {
@@ -63,7 +65,7 @@ class EmbedBatch extends BaseCommand
             foreach ($fields as $id => $provider) {
                 if (ProviderEmbedder::providerText($provider) === '') {
                     $counts['empty']++;
-                } elseif (($stored[$id]['text_hash'] ?? null) === ProviderEmbedder::textHash($provider)) {
+                } elseif (($stored[$id]['text_hash'] ?? null) === ProviderEmbedder::textHash($provider) && $stored[$id]['has_fields']) {
                     $counts['unchanged']++;
                 } else {
                     $todo[$id] = $provider;
@@ -72,7 +74,7 @@ class EmbedBatch extends BaseCommand
 
             try {
                 $result = $embedder->embedMany($todo);
-                $store->saveMany($result['model'], $result['embeddings'], array_map(ProviderEmbedder::textHash(...), $todo));
+                $store->saveMany($result['model'], $result['embeddings'], array_map(ProviderEmbedder::textHash(...), $todo), $todo);
                 $counts['embedded'] += count($todo);
             } catch (RuntimeException $e) { // service failure, or DatabaseException
                 $counts['failed'] += count($todo);
