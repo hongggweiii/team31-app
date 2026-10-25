@@ -46,13 +46,12 @@ final class ShowcaseEmbeddingTest extends CIUnitTestCase
                 'user_id'    => fake(UserModel::class)->id,
                 'name'       => 'Hong Wei Tai',
                 'title'      => 'Financial Due Diligence',
+                'years_experience' => 12, // stored for matcher/, never embedded
                 'headline'   => 'Fractional CFO | Strategy & Finance Expert',
                 'about'      => '<p>I drive transformation.</p>',
                 'how_i_work' => '<p>Remote first</p>',
             ],
             [
-                'categories'   => [],
-                'specialities' => [],
                 'services'     => [
                     ['title' => 'Due diligence', 'description' => '<p>Buy-side reviews</p>'],
                     ['title' => 'Valuation', 'description' => null],

@@ -6,8 +6,7 @@ require __DIR__ . '/partials/form-styles.php';
 
 helper('form');
 
-// $categoryGroups ([service => [id => name]]) and $specialisations
-// ([category_id => [id => name]]) are injected by Gigs::new().
+// $taxonomy (App\Libraries\Taxonomy::tree()) is injected by Gigs::new().
 $errors = array_merge(validation_errors(), (array) session('errors'));
 // Shows the error for $field, or for any of its array items (e.g. "categories.3").
 $err = static function (string $field) use ($errors): string {
@@ -58,6 +57,7 @@ $err = static function (string $field) use ($errors): string {
                value="<?= esc(old('gig_title', '', false)) ?>"
                placeholder="e.g. Interim CFO for a pre-Series B fintech" class="<?= $inputCls ?>">
         <?= $err('gig_title') ?>
+        <p class="<?= $hintCls ?>">3–10 words naming the task, not a job title.</p>
       </div>
 
       <div>
@@ -65,7 +65,32 @@ $err = static function (string $field) use ($errors): string {
         <textarea id="gig_summary" name="gig_summary" rows="4" required
                   placeholder="Summarise the engagement in a few sentences." class="<?= $inputCls ?>"><?= esc(old('gig_summary', '', false)) ?></textarea>
         <?= $err('gig_summary') ?>
-        <p class="<?= $hintCls ?>">This is what Providers see in search results.</p>
+        <p class="<?= $hintCls ?>">This is what Providers see in search results. About 55–120 words: the need and the work,
+          then a sentence starting “Deliverable:” and a last one starting “Engagement duration:”.</p>
+      </div>
+
+      <div>
+        <span class="<?= $labelCls ?>">Engagement Duration</span>
+        <div class="flex items-center gap-3">
+          <label for="duration_weeks_min" class="sr-only">Minimum weeks</label>
+          <input type="number" id="duration_weeks_min" name="duration_weeks_min" min="1" max="52" step="1"
+                 value="<?= esc(old('duration_weeks_min', '', false)) ?>" placeholder="From" class="<?= $inputCls ?> max-w-[7rem]">
+          <span class="text-sm text-ink/60">to</span>
+          <label for="duration_weeks_max" class="sr-only">Maximum weeks</label>
+          <input type="number" id="duration_weeks_max" name="duration_weeks_max" min="1" max="52" step="1"
+                 value="<?= esc(old('duration_weeks_max', '', false)) ?>" placeholder="To" class="<?= $inputCls ?> max-w-[7rem]">
+          <span class="text-sm text-ink/60">weeks</span>
+        </div>
+        <?= $err('duration_weeks_min') ?>
+        <?= $err('duration_weeks_max') ?>
+        <p class="<?= $hintCls ?>">Optional. Fill in one box for a fixed length.</p>
+      </div>
+
+      <div>
+        <label for="additional_notes" class="<?= $labelCls ?>">Additional Notes</label>
+        <textarea id="additional_notes" name="additional_notes" rows="3" maxlength="2000"
+                  placeholder="Budget, timeline or seniority expectations, if any." class="<?= $inputCls ?>"><?= esc(old('additional_notes', '', false)) ?></textarea>
+        <?= $err('additional_notes') ?>
       </div>
     </div>
   </section>

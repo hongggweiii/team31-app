@@ -1,55 +1,57 @@
 <?php
 /**
- * Category -> Specialisations -> Search tags picker, shared by the gig and
- * showcase forms. require'd inside a <form> after partials/form-styles.php.
+ * SkillsFuture taxonomy picker (category -> specialisations -> skills, plus the
+ * derived search tags), shared by the gig and showcase forms. require'd inside
+ * a <form> after partials/form-styles.php.
  *
- * Expects $categoryGroups ([service => [id => name]]), $specialisations
- * ([category_id => [id => name]]) and the form's $err closure. Posts
- * categories[] and specialisations[]. Search tags ("Specialisation (Category)")
- * are only displayed; they are derived from the ticked specialisations.
+ * Expects $taxonomy (App\Libraries\Taxonomy::tree()) and the form's $err
+ * closure. Posts categories[], specialisations[] and skills[<specialisation
+ * id>][]. Search tags ("Specialisation (Category)") are only displayed. The
+ * caps (Taxonomy::MAX_*) are enforced here and again by Taxonomy::check().
  */
-$categoryNames = array_replace([], ...array_values($categoryGroups));
+use App\Libraries\Taxonomy;
+
 $oldCategories = array_map('strval', (array) old('categories', [], false));
 $oldSpecs      = array_map('strval', (array) old('specialisations', [], false));
+$oldSkills     = (array) old('skills', [], false);
+$oldSkillIds   = static fn (int $specId): array => array_map('strval', (array) ($oldSkills[$specId] ?? []));
 
 $listCardCls = 'rounded-card border border-navy/10 bg-white overflow-hidden';
 $searchCls   = 'w-full border-0 border-y border-navy/10 px-6 py-3 text-sm placeholder:text-ink/35 focus:outline-none focus:ring-0';
+$capCls      = 'text-xs font-normal text-ink/50';
 ?>
-<div class="js-taxonomy space-y-6">
+<div class="js-taxonomy space-y-6" data-max-categories="<?= Taxonomy::MAX_CATEGORIES ?>"
+     data-max-specs="<?= Taxonomy::MAX_SPECIALISATIONS ?>" data-max-skills="<?= Taxonomy::MAX_SKILLS ?>">
   <div class="grid gap-6 sm:grid-cols-2">
     <section class="<?= $listCardCls ?>">
-      <h2 class="px-6 pt-5 pb-3 <?= $sectionCls ?>">Category <?= $req ?></h2>
+      <h2 class="px-6 pt-5 pb-3 <?= $sectionCls ?>">Category <?= $req ?>
+        <span class="<?= $capCls ?>">up to <?= Taxonomy::MAX_CATEGORIES ?></span></h2>
       <input type="search" placeholder="Search by Category" aria-label="Search by Category" class="js-cat-search <?= $searchCls ?>">
-      <div class="max-h-80 space-y-5 overflow-y-auto px-6 py-4">
-        <?php foreach ($categoryGroups as $service => $cats): ?>
-          <div class="js-cat-group">
-            <p class="mb-1.5 text-sm font-bold text-navy"><?= esc($service) ?></p>
-            <?php foreach ($cats as $id => $name): ?>
-              <label class="js-cat-row flex cursor-pointer items-center gap-3 py-1.5 text-sm text-ink" data-search="<?= esc(mb_strtolower($name), 'attr') ?>">
-                <input type="checkbox" name="categories[]" value="<?= esc($id) ?>" class="js-cat <?= $checkCls ?>"
-                       <?= in_array((string) $id, $oldCategories, true) ? 'checked' : '' ?>>
-                <?= esc($name) ?>
-              </label>
-            <?php endforeach; ?>
-          </div>
+      <div class="max-h-80 overflow-y-auto px-6 py-4">
+        <?php foreach ($taxonomy as $category): ?>
+          <label class="js-cat-row flex cursor-pointer items-center gap-3 py-1.5 text-sm text-ink has-[:disabled]:cursor-not-allowed has-[:disabled]:text-ink/40"
+                 data-search="<?= esc(mb_strtolower($category['name']), 'attr') ?>">
+            <input type="checkbox" name="categories[]" value="<?= esc((string) $category['id']) ?>" class="js-cat <?= $checkCls ?>"
+                   <?= in_array((string) $category['id'], $oldCategories, true) ? 'checked' : '' ?>>
+            <?= esc($category['name']) ?>
+          </label>
         <?php endforeach; ?>
       </div>
     </section>
 
     <section class="<?= $listCardCls ?>">
-      <h2 class="px-6 pt-5 pb-3 <?= $sectionCls ?>">Specialisations <?= $req ?></h2>
+      <h2 class="px-6 pt-5 pb-3 <?= $sectionCls ?>">Specialisations <?= $req ?>
+        <span class="<?= $capCls ?>">1–<?= Taxonomy::MAX_SPECIALISATIONS ?> per category</span></h2>
       <input type="search" placeholder="Search by Specialisation" aria-label="Search by Specialisation" class="js-spec-search <?= $searchCls ?>">
       <div class="max-h-80 overflow-y-auto px-6 py-4">
         <p class="js-spec-empty text-sm text-ink/50">Tick a category to see its specialisations.</p>
-        <?php foreach ($specialisations as $categoryId => $specs): ?>
-          <?php if (! isset($categoryNames[$categoryId])) continue; // parent category is inactive ?>
-          <?php foreach ($specs as $id => $name): ?>
-            <?php $tag = $name . ' (' . $categoryNames[$categoryId] . ')'; ?>
-            <label class="js-spec-row hidden cursor-pointer items-start gap-3 py-1.5 text-sm text-ink"
-                   data-category="<?= esc($categoryId) ?>" data-search="<?= esc(mb_strtolower($tag), 'attr') ?>">
-              <input type="checkbox" name="specialisations[]" value="<?= esc($id) ?>" data-tag="<?= esc($tag, 'attr') ?>"
-                     class="mt-0.5 <?= $checkCls ?>" <?= in_array((string) $id, $oldSpecs, true) ? 'checked' : '' ?>>
-              <?= esc($tag) ?>
+        <?php foreach ($taxonomy as $category): ?>
+          <?php foreach ($category['specialisations'] as $spec): ?>
+            <label class="js-spec-row hidden cursor-pointer items-start gap-3 py-1.5 text-sm text-ink has-[:disabled]:cursor-not-allowed has-[:disabled]:text-ink/40"
+                   data-category="<?= esc((string) $category['id']) ?>" data-search="<?= esc(mb_strtolower($spec['search_tag']), 'attr') ?>">
+              <input type="checkbox" name="specialisations[]" value="<?= esc((string) $spec['id']) ?>" data-tag="<?= esc($spec['search_tag'], 'attr') ?>"
+                     class="js-spec mt-0.5 <?= $checkCls ?>" <?= in_array((string) $spec['id'], $oldSpecs, true) ? 'checked' : '' ?>>
+              <?= esc($spec['search_tag']) ?>
             </label>
           <?php endforeach; ?>
         <?php endforeach; ?>
@@ -58,6 +60,41 @@ $searchCls   = 'w-full border-0 border-y border-navy/10 px-6 py-3 text-sm placeh
   </div>
   <?= $err('categories') ?>
   <?= $err('specialisations') ?>
+
+  <section class="<?= $listCardCls ?>">
+    <h2 class="px-6 pt-5 pb-1 <?= $sectionCls ?>">Skills
+      <span class="<?= $capCls ?>">optional, up to <?= Taxonomy::MAX_SKILLS ?> per specialisation</span></h2>
+    <p class="px-6 pb-4 <?= $hintCls ?>">SkillsFuture skills linked to each specialisation you tick.</p>
+    <div class="space-y-5 border-t border-navy/10 px-6 py-5">
+      <p class="js-skills-empty text-sm text-ink/50">Tick a specialisation to choose its skills.</p>
+      <?php foreach ($taxonomy as $category): ?>
+        <?php foreach ($category['specialisations'] as $spec): ?>
+          <div class="js-skill-block hidden" data-spec="<?= esc((string) $spec['id']) ?>">
+            <p class="mb-2 text-sm font-semibold text-navy"><?= esc($spec['search_tag']) ?></p>
+            <?php if ($spec['skills'] === []): ?>
+              <p class="text-sm text-ink/50">No skills are listed for this specialisation.</p>
+            <?php else: ?>
+              <?php if (count($spec['skills']) > 12): ?>
+                <input type="search" placeholder="Search skills" aria-label="Search skills for <?= esc($spec['search_tag'], 'attr') ?>"
+                       class="js-skill-search mb-3 w-full rounded-lg border border-navy/15 px-3 py-2 text-sm placeholder:text-ink/35 focus:border-brand focus:outline-none focus:ring-0">
+              <?php endif; ?>
+              <div class="flex flex-wrap gap-2">
+                <?php foreach ($spec['skills'] as $skillId => $skill): ?>
+                  <label class="js-skill-row <?= $chipCls ?> has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40"
+                         data-search="<?= esc(mb_strtolower($skill), 'attr') ?>">
+                    <input type="checkbox" name="skills[<?= esc((string) $spec['id']) ?>][]" value="<?= esc((string) $skillId) ?>" class="js-skill sr-only"
+                           <?= in_array((string) $skillId, $oldSkillIds($spec['id']), true) ? 'checked' : '' ?>>
+                    <?= esc($skill) ?>
+                  </label>
+                <?php endforeach; ?>
+              </div>
+            <?php endif; ?>
+          </div>
+        <?php endforeach; ?>
+      <?php endforeach; ?>
+    </div>
+  </section>
+  <?= $err('skills') ?>
 
   <section class="<?= $listCardCls ?>">
     <h2 class="px-6 py-5 <?= $sectionCls ?>">Search tags</h2>
@@ -70,8 +107,12 @@ $searchCls   = 'w-full border-0 border-y border-navy/10 px-6 py-3 text-sm placeh
 
 <script>
 document.querySelectorAll('.js-taxonomy').forEach(function (root) {
+  var maxCats    = +root.dataset.maxCategories;
+  var maxSpecs   = +root.dataset.maxSpecs;
+  var maxSkills  = +root.dataset.maxSkills;
   var cats       = Array.prototype.slice.call(root.querySelectorAll('.js-cat'));
   var specRows   = Array.prototype.slice.call(root.querySelectorAll('.js-spec-row'));
+  var blocks     = Array.prototype.slice.call(root.querySelectorAll('.js-skill-block'));
   var catSearch  = root.querySelector('.js-cat-search');
   var specSearch = root.querySelector('.js-spec-search');
   var tagBox     = root.querySelector('.js-tags');
@@ -80,17 +121,15 @@ document.querySelectorAll('.js-taxonomy').forEach(function (root) {
   function show(el, visible) { el.classList.toggle('hidden', !visible); }
   function matches(row, query) { return row.dataset.search.indexOf(query.trim().toLowerCase()) !== -1; }
   function specBox(row) { return row.querySelector('input'); }
+  function checked(boxes) { return boxes.filter(function (b) { return b.checked; }); }
+  // At the cap, the unticked boxes are disabled; below it, all are enabled.
+  function cap(boxes, max) {
+    var full = checked(boxes).length >= max;
+    boxes.forEach(function (b) { b.disabled = full && !b.checked; });
+  }
 
   function filterCategories() {
-    root.querySelectorAll('.js-cat-group').forEach(function (group) {
-      var any = false;
-      group.querySelectorAll('.js-cat-row').forEach(function (row) {
-        var ok = matches(row, catSearch.value);
-        show(row, ok);
-        any = any || ok;
-      });
-      show(group, any);
-    });
+    root.querySelectorAll('.js-cat-row').forEach(function (row) { show(row, matches(row, catSearch.value)); });
   }
 
   function renderTags() {
@@ -106,39 +145,66 @@ document.querySelectorAll('.js-taxonomy').forEach(function (root) {
       chip.textContent = box.dataset.tag;
       chip.setAttribute('aria-label', 'Remove ' + box.dataset.tag);
       chip.insertAdjacentHTML('beforeend', '<span aria-hidden="true">&times;</span>');
-      chip.addEventListener('click', function () { box.checked = false; renderTags(); });
+      chip.addEventListener('click', function () { box.checked = false; sync(); });
       tagBox.appendChild(chip);
     });
     show(root.querySelector('.js-tags-empty'), tagBox.children.length === 0);
   }
 
-  // Only specialisations of ticked categories are listed (and stay ticked).
-  function syncSpecialisations() {
+  // Only specialisations of ticked categories are listed (and stay ticked), and
+  // only skills of ticked specialisations; the caps disable further ticks.
+  function sync() {
     var chosen = {};
     cats.forEach(function (c) { if (c.checked) chosen[c.value] = true; });
+    cap(cats, maxCats);
 
+    var perCategory = {};
     specRows.forEach(function (row) {
       var inCategory = !!chosen[row.dataset.category];
       var visible    = inCategory && matches(row, specSearch.value);
       if (!inCategory) specBox(row).checked = false;
       show(row, visible);
       row.classList.toggle('flex', visible);
+      (perCategory[row.dataset.category] = perCategory[row.dataset.category] || []).push(specBox(row));
     });
+    Object.keys(perCategory).forEach(function (c) { cap(perCategory[c], maxSpecs); });
     show(root.querySelector('.js-spec-empty'), Object.keys(chosen).length === 0);
+
+    var anyBlock = false;
+    blocks.forEach(function (block) {
+      var spec  = root.querySelector('.js-spec[value="' + block.dataset.spec + '"]');
+      var on    = spec.checked;
+      var boxes = Array.prototype.slice.call(block.querySelectorAll('.js-skill'));
+      if (!on) boxes.forEach(function (b) { b.checked = false; });
+      cap(boxes, maxSkills);
+      show(block, on);
+      anyBlock = anyBlock || on;
+    });
+    show(root.querySelector('.js-skills-empty'), !anyBlock);
     renderTags();
   }
 
   catSearch.addEventListener('input', filterCategories);
-  specSearch.addEventListener('input', syncSpecialisations);
-  cats.forEach(function (c) { c.addEventListener('change', syncSpecialisations); });
-  specRows.forEach(function (row) { specBox(row).addEventListener('change', renderTags); });
-  syncSpecialisations();
+  specSearch.addEventListener('input', sync);
+  root.addEventListener('change', function (e) {
+    if (e.target.matches('.js-cat, .js-spec, .js-skill')) sync();
+  });
+  root.querySelectorAll('.js-skill-search').forEach(function (search) {
+    search.addEventListener('input', function () {
+      search.closest('.js-skill-block').querySelectorAll('.js-skill-row').forEach(function (row) {
+        show(row, matches(row, search.value));
+      });
+    });
+  });
+  sync();
 
-  // Checkbox groups can't be `required`, so check on submit.
+  // Checkbox groups can't be `required`, so check on submit: every ticked
+  // category needs at least one of its specialisations.
   root.closest('form').addEventListener('submit', function (e) {
-    var missing = !cats.some(function (c) { return c.checked; }) ? catSearch
-      : !specRows.some(function (r) { return specBox(r).checked; }) ? specSearch
-      : null;
+    var bare = checked(cats).some(function (c) {
+      return !specRows.some(function (r) { return r.dataset.category === c.value && specBox(r).checked; });
+    });
+    var missing = checked(cats).length === 0 ? catSearch : bare ? specSearch : null;
     if (missing) {
       e.preventDefault();
       missing.scrollIntoView({ behavior: 'smooth', block: 'center' });

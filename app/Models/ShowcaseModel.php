@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Libraries\Taxonomy;
 use CodeIgniter\Model;
 
 class ShowcaseModel extends Model
@@ -15,11 +16,23 @@ class ShowcaseModel extends Model
         'others'             => 'Others',
     ];
 
+    /**
+     * Most entries per repeatable section, from the Data team's schema v2
+     * (ML_provider_schema_v2.json). skills is per technical proficiency group.
+     */
+    public const LIMITS = [
+        'credentials'  => 6,
+        'services'     => 3,
+        'achievements' => 5,
+        'skill_groups' => 4,
+        'skills'       => 8,
+    ];
+
     protected $table         = 'showcases';
     protected $primaryKey    = 'id';
     protected $returnType    = 'array';
     protected $allowedFields = [
-        'user_id', 'name', 'photo_path', 'title', 'credentials', 'headline', 'about',
+        'user_id', 'name', 'photo_path', 'title', 'years_experience', 'headline', 'about',
         'availability', 'rate', 'how_i_work', 'status',
     ];
     protected $useTimestamps = true;
@@ -38,8 +51,8 @@ class ShowcaseModel extends Model
      * Inserts a showcase and all of its child rows in one transaction.
      *
      * @param array{
-     *     categories: list<int>,
-     *     specialities: list<int>,
+     *     credentials?: list<string>,
+     *     taxonomy?: array{specialisations: list<int>, skills: array<int, list<int>>},
      *     services: list<array{title: string, description: ?string}>,
      *     achievements: list<string>,
      *     skill_groups: list<array{name: string, skills: list<string>}>,
@@ -56,8 +69,7 @@ class ShowcaseModel extends Model
 
         if ($id !== false) {
             $rows = [
-                'showcase_categories'   => array_map(static fn (int $c): array => ['category_id' => $c], $children['categories']),
-                'showcase_specialities' => array_map(static fn (int $s): array => ['speciality_id' => $s], $children['specialities']),
+                'showcase_credentials'  => self::ordered(array_map(static fn (string $c): array => ['description' => $c], $children['credentials'] ?? [])),
                 'showcase_services'     => self::ordered($children['services']),
                 'showcase_achievements' => self::ordered(array_map(static fn (string $a): array => ['description' => $a], $children['achievements'])),
                 'showcase_skill_groups' => self::ordered(array_map(static fn (array $g): array => [
@@ -71,6 +83,7 @@ class ShowcaseModel extends Model
                     $this->db->table($table)->insertBatch(array_map(static fn (array $r): array => ['showcase_id' => $id] + $r, $tableRows));
                 }
             }
+            (new Taxonomy($this->db))->save('showcase', (int) $id, $children['taxonomy'] ?? ['specialisations' => [], 'skills' => []]);
         }
 
         $this->db->transComplete();

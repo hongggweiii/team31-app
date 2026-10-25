@@ -115,8 +115,7 @@ class Catalogue:
         self.by_id = {p["provider_id"]: p for p in providers}
         self.vectors = np.asarray(unit_vectors, dtype=np.float16)
         self.bm25 = BM25Retriever(providers, refined=True) if providers else None
-        # skill_soft compares skill-name vectors; none are needed when no provider has
-        # skills (the app's showcases), as the feature is then 0 regardless.
+        # skill_soft compares skill-name vectors; without them the feature is 0.
         self.tags = TagMatcher([], providers, skill_vectors)
 
 
@@ -261,22 +260,24 @@ def db_query(sql: str, args=None) -> list[dict]:
 
 
 def load_tags(owner: str) -> dict[int, dict]:
-    """The app's category / specialisation links, in the ranker's `tags` shape.
-    Search tags are "<specialisation> (<category>)", as the app labels them
-    (SpecialityModel::searchTags). The app has no skills, so those lists are empty."""
-    cats = db_query(f"SELECT l.{owner}_id AS id, c.name AS category FROM {owner}_categories l "
-                    "JOIN categories c ON c.id = l.category_id")
-    specs = db_query(f"SELECT l.{owner}_id AS id, s.name AS speciality, c.name AS category "
-                     f"FROM {owner}_specialities l JOIN specialities s ON s.id = l.speciality_id "
-                     "JOIN categories c ON c.id = s.category_id")
-    tree: dict[int, dict[str, list[str]]] = {}
-    for r in cats:
-        tree.setdefault(r["id"], {}).setdefault(r["category"], [])
+    """The app's SkillsFuture tags (sf_v1) per gig / showcase, in the ranker's `tags`
+    shape: the owner's specialisations under their categories, with the skills chosen
+    for each. Mirrors Taxonomy::tags() in app/Libraries/Taxonomy.php."""
+    specs = db_query(f"SELECT l.{owner}_id AS id, s.id AS spec_id, s.name AS spec, c.name AS category, c.group_name "
+                     f"FROM {owner}_specialisations l JOIN sf_specialisations s ON s.id = l.specialisation_id "
+                     "JOIN sf_categories c ON c.id = s.category_id")
+    skills: dict[tuple[int, int], list[str]] = {}
+    for r in db_query(f"SELECT l.{owner}_id AS id, l.specialisation_id AS spec_id, k.name FROM {owner}_skills l "
+                      "JOIN sf_skills k ON k.id = l.skill_id"):
+        skills.setdefault((r["id"], r["spec_id"]), []).append(r["name"])
+    tree: dict[int, dict[str, dict]] = {}
     for r in specs:
-        tree.setdefault(r["id"], {}).setdefault(r["category"], []).append(r["speciality"])
-    return {oid: {"categories": [{"name": c, "group": None, "specialisations": [
-                {"name": s, "search_tag": f"{s} ({c})", "skills": []} for s in sorted(set(ss))]}
-                for c, ss in sorted(by_cat.items())]}
+        cat = tree.setdefault(r["id"], {}).setdefault(r["category"], {"group": r["group_name"], "specs": {}})
+        cat["specs"][r["spec"]] = sorted(skills.get((r["id"], r["spec_id"]), []))
+    return {oid: {"taxonomy_version": "sf_v1", "categories": [
+                {"name": c, "group": cat["group"], "specialisations": [
+                    {"name": s, "search_tag": f"{s} ({c})", "skills": ks} for s, ks in sorted(cat["specs"].items())]}
+                for c, cat in sorted(by_cat.items())]}
             for oid, by_cat in tree.items()}
 
 
@@ -290,7 +291,12 @@ def load_catalogue() -> Catalogue:
     providers = [{"provider_id": r["id"], **json.loads(r["fields_json"]), "tags": tags.get(r["id"], {})} for r in rows]
     vectors = (np.stack([np.asarray(json.loads(r["embedding"]), dtype=np.float32) for r in rows])
                if rows else np.zeros((0, DENSE_DIM), np.float32))
-    return Catalogue(providers, vectors)
+    # Every taxonomy skill, not just the showcases': gig skills then never need
+    # embedding inside a match request. The cache is named after the skill list, so a
+    # grown taxonomy gets a new file, which build_skill_vectors fills out of process.
+    skills = [r["name"] for r in db_query("SELECT name FROM sf_skills ORDER BY name")]
+    cache = CACHE / f"app_skill_vectors_{hashlib.sha256(json.dumps(skills).encode()).hexdigest()[:12]}.json"
+    return Catalogue(providers, vectors, build_skill_vectors(skills, cache) if skills else None)
 
 
 def catalogue_version() -> tuple:
