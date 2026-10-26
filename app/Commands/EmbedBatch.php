@@ -16,6 +16,9 @@ use RuntimeException;
  * unchanged since the last run are skipped, so it is safe to run on a schedule.
  * (The record also carries fields that aren't embedded, such as
  * years_experience, so a change there re-saves it.)
+ *
+ * embed:auto calls embedShowcases() with just the showcases it found waiting,
+ * so a scheduled run doesn't rescan the whole catalogue.
  */
 class EmbedBatch extends BaseCommand
 {
@@ -24,11 +27,12 @@ class EmbedBatch extends BaseCommand
     protected $group       = 'App';
     protected $name        = 'embed:batch';
     protected $description = 'Embeds new or changed showcases via embedding-service/ and stores the vectors in MariaDB.';
-    protected $usage       = 'embed:batch showcases [--size 32] [--all]';
+    protected $usage       = 'embed:batch showcases [--size 32] [--all] [--ids 5,6,7]';
     protected $arguments   = ['target' => 'What to embed: showcases (gigs need a gig embedder first)'];
     protected $options     = [
         '--size' => 'Showcases per request to the embedding service (1-' . self::MAX_SIZE . ', default 32)',
         '--all'  => 'Re-embed everything, even when the text is unchanged',
+        '--ids'  => 'Only these showcase ids (comma-separated) instead of every published showcase',
     ];
 
     public function run(array $params)
@@ -42,8 +46,37 @@ class EmbedBatch extends BaseCommand
             return EXIT_USER_INPUT;
         }
 
-        $size = max(1, min(self::MAX_SIZE, (int) (CLI::getOption('size') ?? 32)));
-        $all  = CLI::getOption('all') !== null;
+        $ids = CLI::getOption('ids');
+        if ($ids !== null && ! is_string($ids)) { // --ids given without a value
+            CLI::error('--ids needs a comma-separated list, e.g. --ids 5,6,7');
+
+            return EXIT_USER_INPUT;
+        }
+
+        return $this->embedShowcases(
+            $ids === null ? null : array_map('intval', array_filter(explode(',', $ids), 'is_numeric')),
+            (int) (CLI::getOption('size') ?? 32),
+            CLI::getOption('all') !== null,
+        );
+    }
+
+    /**
+     * Embeds published showcases, page by page.
+     *
+     * @param list<int>|null $ids Only these showcases; null for every published one
+     * @param int            $size Showcases per request to the embedding service
+     * @param bool           $all Re-embed even when unchanged
+     *
+     * @return int EXIT_SUCCESS, or EXIT_ERROR if any showcase failed
+     */
+    public function embedShowcases(?array $ids = null, int $size = 32, bool $all = false): int
+    {
+        $size = max(1, min(self::MAX_SIZE, $size));
+        if ($ids === []) {
+            CLI::write('Done. Nothing to embed.');
+
+            return EXIT_SUCCESS;
+        }
 
         $db       = db_connect();
         $embedder = new ProviderEmbedder();
@@ -52,8 +85,11 @@ class EmbedBatch extends BaseCommand
         $lastId   = 0;
 
         while (true) {
-            $page = $db->table('showcases')->where('status', 'published')->where('id >', $lastId)
-                ->orderBy('id')->limit($size)->get()->getResultArray();
+            $query = $db->table('showcases')->where('status', 'published')->where('id >', $lastId);
+            if ($ids !== null) {
+                $query->whereIn('id', $ids);
+            }
+            $page = $query->orderBy('id')->limit($size)->get()->getResultArray();
             if ($page === []) {
                 break;
             }
@@ -62,19 +98,25 @@ class EmbedBatch extends BaseCommand
             $fields = ProviderEmbedder::showcaseFields($page);
             $stored = $all ? [] : $store->stored(array_keys($fields));
 
-            $todo = [];
+            $todo    = [];
+            $checked = []; // unchanged, but the showcase was updated after its vector
+            $updated = array_column($page, 'updated_at', 'id');
             foreach ($fields as $id => $provider) {
                 if (ProviderEmbedder::providerText($provider) === '') {
                     $counts['empty']++;
                 } elseif (($stored[$id]['text_hash'] ?? null) === ProviderEmbedder::textHash($provider)
                     && $stored[$id]['fields_json'] === EmbeddingStore::encodeFields($provider)) {
                     $counts['unchanged']++;
+                    if (($updated[$id] ?? '') > ($stored[$id]['updated_at'] ?? '')) {
+                        $checked[] = $id;
+                    }
                 } else {
                     $todo[$id] = $provider;
                 }
             }
 
             try {
+                $store->touch($checked);
                 $result = $embedder->embedMany($todo);
                 $store->saveMany($result['model'], $result['embeddings'], array_map(ProviderEmbedder::textHash(...), $todo), $todo);
                 $counts['embedded'] += count($todo);
