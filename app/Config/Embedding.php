@@ -27,4 +27,15 @@ class Embedding extends BaseConfig
      * vector DB column the embeddings are pushed into.
      */
     public int $dimensions = 1024;
+
+    /**
+     * `php spark embed:auto` (run by cron every minute) embeds waiting
+     * showcases once this many are waiting...
+     */
+    public int $autoBatchSize = 20;
+
+    /**
+     * ...or once the oldest has waited this many minutes, whichever comes first.
+     */
+    public int $autoMaxWaitMinutes = 15;
 }

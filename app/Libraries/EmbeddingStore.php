@@ -38,7 +38,7 @@ class EmbeddingStore
      *
      * @param list<int> $ids
      *
-     * @return array<int, array{model: string, text_hash: string, has_fields: bool, fields_json: ?string}> Only ids that have a vector
+     * @return array<int, array{model: string, text_hash: string, has_fields: bool, fields_json: ?string, updated_at: ?string}> Only ids that have a vector
      */
     public function stored(array $ids): array
     {
@@ -47,7 +47,7 @@ class EmbeddingStore
         }
 
         $stored = [];
-        $rows   = $this->db->table($this->table)->select("{$this->key}, model, text_hash, fields_json, fields_json IS NOT NULL AS has_fields", false)
+        $rows   = $this->db->table($this->table)->select("{$this->key}, model, text_hash, fields_json, fields_json IS NOT NULL AS has_fields, updated_at", false)
             ->whereIn($this->key, $ids)->get()->getResultArray();
         foreach ($rows as $row) {
             $stored[(int) $row[$this->key]] = [
@@ -55,10 +55,25 @@ class EmbeddingStore
                 'text_hash'   => $row['text_hash'],
                 'has_fields'  => (bool) $row['has_fields'],
                 'fields_json' => $row['fields_json'],
+                'updated_at'  => $row['updated_at'],
             ];
         }
 
         return $stored;
+    }
+
+    /**
+     * Marks vectors as checked against their (unchanged) showcase / gig now,
+     * without re-embedding: embed:auto counts a showcase as waiting while it
+     * was updated after its vector.
+     *
+     * @param list<int> $ids
+     */
+    public function touch(array $ids): void
+    {
+        if ($ids !== []) {
+            $this->db->table($this->table)->whereIn($this->key, $ids)->update(['updated_at' => date('Y-m-d H:i:s')]);
+        }
     }
 
     /**

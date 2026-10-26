@@ -109,13 +109,15 @@ Vectors live in the app database itself. MariaDB 11.7+ (Layerbase runs 11.8) has
   php spark embed:batch showcases [--size 32] [--all]   # options take a space, not "="
   ```
 
-  It pages through published showcases, skips any whose embedded text and stored record (`fields_json`) are unchanged, sends each page to `POST /embed/providers` in one request and upserts the vectors. Re-running is cheap. `--all` re-embeds everything (e.g. after a model change).
+  It pages through published showcases, skips any whose embedded text and stored record (`fields_json`) are unchanged, sends each page to `POST /embed/providers` in one request and upserts the vectors. Re-running is cheap. `--all` re-embeds everything (e.g. after a model change); `--ids 5,6,7` handles only those showcases.
 
-  A new or edited showcase can't be matched until this has run, so schedule it, e.g. every 5 minutes with cron (`crontab -e`; use absolute paths, cron has a minimal `PATH`):
+  A new or edited showcase can't be matched until this has run, so let cron run `embed:auto` every minute (`crontab -e`; use absolute paths, cron has a minimal `PATH`):
 
   ```cron
-  */5 * * * * cd /path/to/team31-app && /opt/homebrew/bin/php spark embed:batch showcases >> writable/logs/embed-batch.log 2>&1
+  * * * * * cd /path/to/team31-app && /opt/homebrew/bin/php spark embed:auto >> writable/logs/embed-auto.log 2>&1
   ```
+
+  `embed:auto` counts the published showcases waiting to be embedded (no vector yet, or updated since it) and embeds just those (as `embed:batch` does, without rescanning the rest) once **20** are waiting or the oldest has waited **15 minutes**, whichever comes first; otherwise it exits after one query. Change the thresholds with `embedding.autoBatchSize` / `embedding.autoMaxWaitMinutes` in `.env`. `php spark embed:auto --dry-run` shows what is waiting without running anything, and a lock stops a slow run overlapping the next one.
 
   A run while `embedding-service/` is down only logs the failure; the next run catches up.
 - Gigs are embedded live, inside the match request, and `matcher/` saves the vector to `gig_embeddings` only after it has returned the matches (so saving never counts against the 5 s). Nothing reads `gig_embeddings` during matching; it is kept for later use.
