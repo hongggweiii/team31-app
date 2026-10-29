@@ -20,7 +20,7 @@ class Gigs extends BaseController
     public function new(): string
     {
         return view('create-gig', [
-            'taxonomy' => (new Taxonomy())->tree(),
+            'taxonomy' => (new Taxonomy())->cachedTree(),
         ]);
     }
 

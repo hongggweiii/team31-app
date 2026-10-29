@@ -2,6 +2,7 @@
 
 namespace Config;
 
+use App\Libraries\RequestTimer;
 use CodeIgniter\Events\Events;
 use CodeIgniter\Exceptions\FrameworkException;
 use CodeIgniter\HotReloader\HotReloader;
@@ -36,6 +37,12 @@ Events::on('pre_system', static function (): void {
         }
 
         ob_start(static fn ($buffer) => $buffer);
+    }
+
+    // Per-request timing report in the `php spark serve` console (Config\RequestTimer).
+    if (RequestTimer::enabled()) {
+        Events::on('DBQuery', [RequestTimer::class, 'query']);
+        Events::on('post_system', [RequestTimer::class, 'reportAfterResponse']);
     }
 
     /*

@@ -195,6 +195,8 @@ Both forms tag a gig / showcase as the Data team's records do: up to 2 **categor
   php spark taxonomy:import providers.json hirers.json   # the Data team's tagged records (not kept in the repo)
   ```
 
+- The forms' taxonomy picker is cached for a day (`Taxonomy::cachedTree()`); `taxonomy:import` clears it. After editing the `sf_*` tables by hand (e.g. in Layerbase), run `php spark cache:clear`.
+
 ## Adding a page
 
 1. Create the view under `app/Views/`, extending the shared layout:

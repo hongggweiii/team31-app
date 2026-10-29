@@ -61,10 +61,10 @@ class MatcherClient
      */
     public function match(array $request): array
     {
-        $response = $this->client->post('match', [
+        $response = RequestTimer::span('matcher', fn () => $this->client->post('match', [
             'json'        => $request,
             'http_errors' => false,
-        ]);
+        ]));
 
         $status = $response->getStatusCode();
         $body   = (string) $response->getBody();

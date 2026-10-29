@@ -132,6 +132,16 @@ final class TaxonomyTest extends CIUnitTestCase
         ], $gigs->rankerTaxonomy($gigId));
     }
 
+    public function testCachedTreeIsClearedByImport(): void
+    {
+        $this->taxonomy->forgetTree();
+        $this->assertSame($this->taxonomy->tree(), $this->taxonomy->cachedTree());
+
+        $this->taxonomy->import([['name' => 'Agriculture', 'specialisations' => [['name' => 'Agronomy', 'skills' => []]]]]);
+
+        $this->assertContains('Agriculture', array_column($this->taxonomy->cachedTree(), 'name'));
+    }
+
     public function testImportIsAdditiveAndFillsInGroups(): void
     {
         $before = $this->taxonomy->tree();

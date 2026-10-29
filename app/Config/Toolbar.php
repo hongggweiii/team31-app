@@ -10,6 +10,7 @@ use CodeIgniter\Debug\Toolbar\Collectors\Logs;
 use CodeIgniter\Debug\Toolbar\Collectors\Routes;
 use CodeIgniter\Debug\Toolbar\Collectors\Timers;
 use CodeIgniter\Debug\Toolbar\Collectors\Views;
+use CodeIgniter\Shield\Collectors\Auth as ShieldAuthCollector;
 
 /**
  * --------------------------------------------------------------------------
@@ -144,4 +145,13 @@ class Toolbar extends BaseConfig
         'HX-Request'       => 'true',           // HTMX requests
         'X-Up-Version'     => null,             // Unpoly partial requests
     ];
+
+    public function __construct()
+    {
+        parent::__construct();
+
+        // Shield's registrar adds an Auth tab, which looks up the user's groups and
+        // permissions: two extra queries on every page, for a tab the app doesn't need.
+        $this->collectors = array_values(array_diff($this->collectors, [ShieldAuthCollector::class]));
+    }
 }
