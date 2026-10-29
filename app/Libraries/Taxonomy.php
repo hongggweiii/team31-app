@@ -24,6 +24,7 @@ final class Taxonomy
 
     private const OWNERS             = ['gig', 'showcase'];
     private const TREE_CACHE_SECONDS = 86400;
+    private const TREE_CACHE_VERSION = 2; // 2: categories carry their group
 
     private BaseConnection $db;
 
@@ -44,13 +45,13 @@ final class Taxonomy
      * The whole taxonomy for the picker, categories and specialisations by
      * name.
      *
-     * @return list<array{id: int, name: string, specialisations: list<array{id: int, name: string, search_tag: string, skills: array<int, string>}>}>
+     * @return list<array{id: int, name: string, group: string|null, specialisations: list<array{id: int, name: string, search_tag: string, skills: array<int, string>}>}>
      */
     public function tree(): array
     {
         $categories = [];
-        foreach ($this->db->table('sf_categories')->select('id, name')->orderBy('name')->get()->getResultArray() as $row) {
-            $categories[(int) $row['id']] = ['id' => (int) $row['id'], 'name' => $row['name'], 'specialisations' => []];
+        foreach ($this->db->table('sf_categories')->select('id, name, group_name')->orderBy('name')->get()->getResultArray() as $row) {
+            $categories[(int) $row['id']] = ['id' => (int) $row['id'], 'name' => $row['name'], 'group' => $row['group_name'], 'specialisations' => []];
         }
 
         $skills = [];
@@ -80,7 +81,7 @@ final class Taxonomy
      * through import(), which clears it. After editing the sf_* tables by
      * hand, run `php spark cache:clear`.
      *
-     * @return list<array{id: int, name: string, specialisations: list<array{id: int, name: string, search_tag: string, skills: array<int, string>}>}>
+     * @return list<array{id: int, name: string, group: string|null, specialisations: list<array{id: int, name: string, search_tag: string, skills: array<int, string>}>}>
      */
     public function cachedTree(): array
     {
@@ -94,10 +95,12 @@ final class Taxonomy
 
     /**
      * One entry per database, so the test database never shares the app's.
+     * Bump TREE_CACHE_VERSION whenever tree()'s shape changes, so an entry
+     * cached in the old shape is never read.
      */
     private function treeCacheKey(): string
     {
-        return 'taxonomy_tree_' . md5($this->db->hostname . '/' . $this->db->database);
+        return 'taxonomy_tree_v' . self::TREE_CACHE_VERSION . '_' . md5($this->db->hostname . '/' . $this->db->database);
     }
 
     /**
@@ -253,6 +256,45 @@ final class Taxonomy
                 ksort($category['specialisations']);
                 $tags[$ownerId][] = ['name' => $name, 'group' => $category['group'], 'specialisations' => array_values($category['specialisations'])];
             }
+        }
+
+        return $tags;
+    }
+
+    /**
+     * What tags() returns for an owner with this check()ed selection, built
+     * from the cached tree instead of read back from the database.
+     *
+     * @param array{specialisations: list<int>, skills: array<int, list<int>>} $selection
+     *
+     * @return list<array{name: string, group: string|null, specialisations: list<array{name: string, search_tag: string, skills: list<string>}>}>
+     */
+    public function selectionTags(array $selection): array
+    {
+        $chosen = array_flip($selection['specialisations']);
+        $tree   = [];
+        foreach ($this->cachedTree() as $category) {
+            foreach ($category['specialisations'] as $specialisation) {
+                if (! isset($chosen[$specialisation['id']])) {
+                    continue;
+                }
+                $skills = array_values(array_intersect_key($specialisation['skills'], array_flip($selection['skills'][$specialisation['id']] ?? [])));
+                sort($skills);
+                $tree[$category['name']]['group']                                    = $category['group'];
+                $tree[$category['name']]['specialisations'][$specialisation['name']] = [
+                    'name'       => $specialisation['name'],
+                    'search_tag' => $specialisation['search_tag'],
+                    'skills'     => $skills,
+                ];
+            }
+        }
+
+        // Ordered as tags() orders them.
+        $tags = [];
+        ksort($tree);
+        foreach ($tree as $name => $category) {
+            ksort($category['specialisations']);
+            $tags[] = ['name' => $name, 'group' => $category['group'], 'specialisations' => array_values($category['specialisations'])];
         }
 
         return $tags;

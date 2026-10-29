@@ -132,6 +132,21 @@ final class TaxonomyTest extends CIUnitTestCase
         ], $gigs->rankerTaxonomy($gigId));
     }
 
+    public function testSelectionTagsMatchWhatIsSaved(): void
+    {
+        $selection = [
+            'specialisations' => [$this->specId('Financial Services', 'Digital and Data Analytics'), $this->specId('Accountancy', 'Tax'), $this->specId('Accountancy', 'Assurance')],
+            'skills'          => [
+                $this->specId('Accountancy', 'Assurance')                         => [$this->skillId('Financial Statements Analysis'), $this->skillId('Audit Compliance')],
+                $this->specId('Financial Services', 'Digital and Data Analytics') => [$this->skillId('Risk Management'), $this->skillId('Cloud Computing')],
+            ],
+        ];
+        $gigs  = new GigModel();
+        $gigId = $gigs->createWithTaxonomy(['user_id' => fake(UserModel::class)->id, 'title' => 'Audit', 'summary' => 'Year-end audit.'], $selection);
+
+        $this->assertSame($gigs->rankerTaxonomy($gigId), $this->taxonomy->selectionTags($selection));
+    }
+
     public function testCachedTreeIsClearedByImport(): void
     {
         $this->taxonomy->forgetTree();

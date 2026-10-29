@@ -106,6 +106,24 @@ final class GigMatchesTest extends CIUnitTestCase
         ]], $this->matcher->requests);
     }
 
+    public function testUsesTheGigPassedOnByCreate(): void
+    {
+        $this->matcher->answer = self::response();
+        // Proves the page didn't read the gig back: the database now says otherwise.
+        $this->db->table('gigs')->where('id', $this->gigId)->update(['title' => 'Changed in the database']);
+        $passedOn = [
+            'gig'      => ['id' => $this->gigId, 'user_id' => $this->owner->id, 'title' => 'Interim CFO', 'summary' => 'Lead finance for six months.'],
+            'taxonomy' => [['name' => 'Accountancy', 'group' => null, 'specialisations' => []]],
+        ];
+
+        $this->actingAs($this->owner)
+            ->withSession(['new_gig' => $passedOn, '__ci_vars' => ['new_gig' => 'new']])
+            ->get("gigs/{$this->gigId}/matches");
+
+        $this->assertSame('Interim CFO', $this->matcher->requests[0]['hire_title']);
+        $this->assertSame($passedOn['taxonomy'], $this->matcher->requests[0]['taxonomy']);
+    }
+
     public function testOwnerSeesTheMatches(): void
     {
         $this->matcher->answer = self::response();
