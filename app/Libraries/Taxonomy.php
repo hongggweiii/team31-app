@@ -22,7 +22,9 @@ final class Taxonomy
     public const MAX_SPECIALISATIONS = 3; // per category
     public const MAX_SKILLS          = 8; // per specialisation
 
-    private const OWNERS = ['gig', 'showcase'];
+    private const OWNERS             = ['gig', 'showcase'];
+    private const TREE_CACHE_SECONDS = 86400;
+    private const TREE_CACHE_VERSION = 2; // 2: categories carry their group
 
     private BaseConnection $db;
 
@@ -43,13 +45,13 @@ final class Taxonomy
      * The whole taxonomy for the picker, categories and specialisations by
      * name.
      *
-     * @return list<array{id: int, name: string, specialisations: list<array{id: int, name: string, search_tag: string, skills: array<int, string>}>}>
+     * @return list<array{id: int, name: string, group: string|null, specialisations: list<array{id: int, name: string, search_tag: string, skills: array<int, string>}>}>
      */
     public function tree(): array
     {
         $categories = [];
-        foreach ($this->db->table('sf_categories')->select('id, name')->orderBy('name')->get()->getResultArray() as $row) {
-            $categories[(int) $row['id']] = ['id' => (int) $row['id'], 'name' => $row['name'], 'specialisations' => []];
+        foreach ($this->db->table('sf_categories')->select('id, name, group_name')->orderBy('name')->get()->getResultArray() as $row) {
+            $categories[(int) $row['id']] = ['id' => (int) $row['id'], 'name' => $row['name'], 'group' => $row['group_name'], 'specialisations' => []];
         }
 
         $skills = [];
@@ -74,6 +76,34 @@ final class Taxonomy
     }
 
     /**
+     * tree(), cached for TREE_CACHE_SECONDS: it is 3 queries (the skills one
+     * returns ~2,000 rows) per form load and per check(); the taxonomy only changes
+     * through import(), which clears it. After editing the sf_* tables by
+     * hand, run `php spark cache:clear`.
+     *
+     * @return list<array{id: int, name: string, group: string|null, specialisations: list<array{id: int, name: string, search_tag: string, skills: array<int, string>}>}>
+     */
+    public function cachedTree(): array
+    {
+        return cache()->remember($this->treeCacheKey(), self::TREE_CACHE_SECONDS, fn (): array => $this->tree());
+    }
+
+    public function forgetTree(): void
+    {
+        cache()->delete($this->treeCacheKey());
+    }
+
+    /**
+     * One entry per database, so the test database never shares the app's.
+     * Bump TREE_CACHE_VERSION whenever tree()'s shape changes, so an entry
+     * cached in the old shape is never read.
+     */
+    private function treeCacheKey(): string
+    {
+        return 'taxonomy_tree_v' . self::TREE_CACHE_VERSION . '_' . md5($this->db->hostname . '/' . $this->db->database);
+    }
+
+    /**
      * Checks a picker submission against the taxonomy and the schema v2 caps.
      * Skills posted for a specialisation that isn't chosen are ignored.
      *
@@ -95,7 +125,18 @@ final class Taxonomy
         $specialisations = $ids($specialisations);
         $errors          = [];
 
-        $known = array_column($this->db->table('sf_categories')->select('id, name')->get()->getResultArray(), 'name', 'id');
+        // Checked against the cached tree, so validating a form costs no queries.
+        $known    = []; // category id => name
+        $parentOf = []; // specialisation id => category id
+        $linked   = []; // specialisation id => [skill id => true]
+        foreach ($this->cachedTree() as $category) {
+            $known[$category['id']] = $category['name'];
+            foreach ($category['specialisations'] as $specialisation) {
+                $parentOf[$specialisation['id']] = $category['id'];
+                $linked[$specialisation['id']]   = array_fill_keys(array_keys($specialisation['skills']), true);
+            }
+        }
+
         if ($categories === []) {
             $errors['categories'] = 'Choose at least one category.';
         } elseif (count($categories) > self::MAX_CATEGORIES) {
@@ -104,19 +145,15 @@ final class Taxonomy
             $errors['categories'] = 'Choose categories from the list.';
         }
 
-        $parents = $specialisations === [] ? [] : array_column(
-            $this->db->table('sf_specialisations')->select('id, category_id')->whereIn('id', $specialisations)->get()->getResultArray(),
-            'category_id',
-            'id',
-        );
+        $parents = array_intersect_key($parentOf, array_flip($specialisations));
         if ($specialisations === []) {
             $errors['specialisations'] = 'Choose at least one specialisation.';
         } elseif (count($parents) !== count($specialisations)) {
             $errors['specialisations'] = 'Choose specialisations from the list.';
-        } elseif (array_diff(array_map('intval', $parents), $categories) !== []) {
+        } elseif (array_diff($parents, $categories) !== []) {
             $errors['specialisations'] = 'Each specialisation must belong to one of the chosen categories.';
         } elseif (! isset($errors['categories'])) {
-            $perCategory = array_count_values(array_map('intval', $parents));
+            $perCategory = array_count_values($parents);
             foreach ($categories as $category) {
                 $n = $perCategory[$category] ?? 0;
                 if ($n === 0 || $n > self::MAX_SPECIALISATIONS) {
@@ -132,19 +169,11 @@ final class Taxonomy
                 $chosenSkills[(int) $specialisation] = $skillIds;
             }
         }
-        if ($chosenSkills !== []) {
-            $linked = [];
-            $rows   = $this->db->table('sf_specialisation_skills')->select('specialisation_id, skill_id')
-                ->whereIn('specialisation_id', array_keys($chosenSkills))->get()->getResultArray();
-            foreach ($rows as $row) {
-                $linked[(int) $row['specialisation_id']][(int) $row['skill_id']] = true;
-            }
-            foreach ($chosenSkills as $specialisation => $skillIds) {
-                if (count($skillIds) > self::MAX_SKILLS) {
-                    $errors['skills'] = 'Choose at most ' . self::MAX_SKILLS . ' skills per specialisation.';
-                } elseif (array_diff_key(array_flip($skillIds), $linked[$specialisation] ?? []) !== []) {
-                    $errors['skills'] = 'Choose skills from the list for each specialisation.';
-                }
+        foreach ($chosenSkills as $specialisation => $skillIds) {
+            if (count($skillIds) > self::MAX_SKILLS) {
+                $errors['skills'] = 'Choose at most ' . self::MAX_SKILLS . ' skills per specialisation.';
+            } elseif (array_diff_key(array_flip($skillIds), $linked[$specialisation] ?? []) !== []) {
+                $errors['skills'] = 'Choose skills from the list for each specialisation.';
             }
         }
 
@@ -233,6 +262,45 @@ final class Taxonomy
     }
 
     /**
+     * What tags() returns for an owner with this check()ed selection, built
+     * from the cached tree instead of read back from the database.
+     *
+     * @param array{specialisations: list<int>, skills: array<int, list<int>>} $selection
+     *
+     * @return list<array{name: string, group: string|null, specialisations: list<array{name: string, search_tag: string, skills: list<string>}>}>
+     */
+    public function selectionTags(array $selection): array
+    {
+        $chosen = array_flip($selection['specialisations']);
+        $tree   = [];
+        foreach ($this->cachedTree() as $category) {
+            foreach ($category['specialisations'] as $specialisation) {
+                if (! isset($chosen[$specialisation['id']])) {
+                    continue;
+                }
+                $skills = array_values(array_intersect_key($specialisation['skills'], array_flip($selection['skills'][$specialisation['id']] ?? [])));
+                sort($skills);
+                $tree[$category['name']]['group']                                    = $category['group'];
+                $tree[$category['name']]['specialisations'][$specialisation['name']] = [
+                    'name'       => $specialisation['name'],
+                    'search_tag' => $specialisation['search_tag'],
+                    'skills'     => $skills,
+                ];
+            }
+        }
+
+        // Ordered as tags() orders them.
+        $tags = [];
+        ksort($tree);
+        foreach ($tree as $name => $category) {
+            ksort($category['specialisations']);
+            $tags[] = ['name' => $name, 'group' => $category['group'], 'specialisations' => array_values($category['specialisations'])];
+        }
+
+        return $tags;
+    }
+
+    /**
      * Adds the given taxonomy to the sf_* tables. Additive: entries already
      * there are kept (gigs and showcases may point at them), so re-importing
      * a newer taxonomy only adds what's new and fills in groups.
@@ -305,6 +373,7 @@ final class Taxonomy
         }
 
         $this->db->transComplete();
+        $this->forgetTree();
 
         return $added;
     }

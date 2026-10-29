@@ -49,9 +49,21 @@ $navLinks = [
 ];
 $href = static fn (?string $route): string => $route === null ? '#' : base_url($route);
 
+// The user's email lives in auth_identities: kept in the session (for that
+// user) so every page doesn't spend a query on the navbar.
+$email = static function (): string {
+    $saved = session('navbar_email');
+    if (! is_array($saved) || $saved['user'] !== auth()->id()) {
+        $saved = ['user' => auth()->id(), 'email' => (string) auth()->user()->email];
+        session()->set('navbar_email', $saved);
+    }
+
+    return $saved['email'];
+};
+
 // Shield auth routes: [label, route] for the secondary link and the primary button.
 [$authLink, $authButton] = auth()->loggedIn()
-    ? [[auth()->user()->email, null], ['Logout', 'logout']]
+    ? [[$email(), null], ['Logout', 'logout']]
     : [['Login', 'login'], ['Create Account', 'register']];
 ?>
 

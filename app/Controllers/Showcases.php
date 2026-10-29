@@ -24,7 +24,7 @@ class Showcases extends BaseController
     public function new(): string
     {
         return view('create-profile', [
-            'taxonomy'           => (new Taxonomy())->tree(),
+            'taxonomy'           => (new Taxonomy())->cachedTree(),
             'documentCategories' => ShowcaseModel::DOCUMENT_CATEGORIES,
             'limits'             => ShowcaseModel::LIMITS,
         ]);

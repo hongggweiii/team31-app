@@ -12,6 +12,8 @@ HTTP wrapper around embedding.py, called by app/Libraries/ProviderEmbedder.php.
 Run (from embedding-service/):
     uvicorn app:app --port 8001
 """
+import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -32,6 +34,8 @@ async def lifespan(_app: FastAPI):
 # Bounds one request's memory and latency; the PHP batch command pages below this.
 MAX_BATCH = 128
 
+
+log = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="SenseiGigs embedding service", lifespan=lifespan)
 
@@ -93,4 +97,7 @@ def embed_gigs_route(batch: GigBatch):
     empty = [i for i, f in enumerate(fields) if not hirer_text(f).strip()]
     if empty:
         raise HTTPException(status_code=422, detail=f"All gig text fields are empty at index {empty}")
-    return {"model": BASE_MODEL_NAME, "dimensions": EMBED_DIM, "embeddings": embed_gigs(fields)}
+    t0 = time.perf_counter()
+    embeddings = embed_gigs(fields)
+    log.info("[timing] embedded %d gig(s) in %.0f ms (model encode)", len(fields), (time.perf_counter() - t0) * 1000)
+    return {"model": BASE_MODEL_NAME, "dimensions": EMBED_DIM, "embeddings": embeddings}

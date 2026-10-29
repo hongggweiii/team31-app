@@ -441,8 +441,15 @@ async def match(req: MatchRequest, background: BackgroundTasks):
            "industry": req.industry, "tags": {"categories": req.taxonomy}}
     vector, model_name = embed_gig(gig)
     t1 = time.perf_counter()
-    out = response(rank(cat, gig, vector), cat, req.top_k)
+    rows = candidates(cat, gig, vector)
+    t2 = time.perf_counter()
+    ranked = score(rows)
+    t3 = time.perf_counter()
+    out = response(ranked, cat, req.top_k)
+    t4 = time.perf_counter()
     if not RANKER:  # after the response is sent, outside the 5 s
         background.add_task(save_gig_embedding, gig, vector, model_name)
-    log.info("matched gig %s: embed %.0f ms + rank %.0f ms", req.hire_id, (t1 - t0) * 1000, (time.perf_counter() - t1) * 1000)
+    log.info("[timing] matched gig %s in %.0f ms: embed (embedding-service) %.0f ms | candidates (BM25 + cosine + RRF + tags, "
+             "%d showcases) %.0f ms | score (xgboost) %.0f ms | response %.0f ms", req.hire_id, (t4 - t0) * 1000,
+             (t1 - t0) * 1000, len(cat.providers), (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000)
     return out

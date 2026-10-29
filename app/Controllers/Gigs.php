@@ -17,10 +17,16 @@ class Gigs extends BaseController
     /** Longest engagement a hirer can enter, in weeks. */
     private const MAX_DURATION_WEEKS = 52;
 
+    /**
+     * Flashdata create() leaves for the matches page it redirects to: the new
+     * gig and its tags, so that page doesn't read them back from the database.
+     */
+    private const NEW_GIG_FLASH = 'new_gig';
+
     public function new(): string
     {
         return view('create-gig', [
-            'taxonomy' => (new Taxonomy())->tree(),
+            'taxonomy' => (new Taxonomy())->cachedTree(),
         ]);
     }
 
@@ -37,8 +43,9 @@ class Gigs extends BaseController
         ];
 
         // Checked together so every problem is reported at once.
-        $valid    = $this->validate($rules);
-        $taxonomy = (new Taxonomy())->check(
+        $valid      = $this->validate($rules);
+        $taxonomies = new Taxonomy();
+        $taxonomy   = $taxonomies->check(
             $this->request->getPost('categories'),
             $this->request->getPost('specialisations'),
             $this->request->getPost('skills'),
@@ -61,24 +68,27 @@ class Gigs extends BaseController
         }
         $notes = trim((string) ($data['additional_notes'] ?? ''));
 
-        $gigId = $gigs->createWithTaxonomy(
-            [
-                'user_id'            => auth()->id(),
-                'title'              => trim($data['gig_title']),
-                'summary'            => trim($data['gig_summary']),
-                'duration_weeks_min' => $minWeeks,
-                'duration_weeks_max' => $maxWeeks,
-                'additional_notes'   => $notes !== '' ? $notes : null,
-            ],
-            $taxonomy['selection'],
-        );
+        $gig = [
+            'user_id'            => auth()->id(),
+            'title'              => trim($data['gig_title']),
+            'summary'            => trim($data['gig_summary']),
+            'duration_weeks_min' => $minWeeks,
+            'duration_weeks_max' => $maxWeeks,
+            'additional_notes'   => $notes !== '' ? $notes : null,
+        ];
+        $gigId = $gigs->createWithTaxonomy($gig, $taxonomy['selection']);
 
         if ($gigId === false) {
             return redirect()->back()->withInput()
                 ->with('errors', $gigs->errors() ?: ['gig' => 'Your gig could not be saved. Please try again.']);
         }
 
-        return redirect()->to(url_to('gig-matches', $gigId))->with('message', 'Your gig has been posted.');
+        return redirect()->to(url_to('gig-matches', $gigId))
+            ->with('message', 'Your gig has been posted.')
+            ->with(self::NEW_GIG_FLASH, [
+                'gig'      => ['id' => $gigId, ...$gig],
+                'taxonomy' => $taxonomies->selectionTags($taxonomy['selection']),
+            ]);
     }
 
     /**
@@ -88,16 +98,24 @@ class Gigs extends BaseController
      */
     public function matches(int $gigId): string
     {
+        // Straight after create(): the gig and its tags came with the redirect.
+        $new  = session()->getFlashdata(self::NEW_GIG_FLASH);
         $gigs = new GigModel();
-        $gig  = $gigs->find($gigId);
+        $tags = null;
+        if (is_array($new) && ($new['gig']['id'] ?? null) === $gigId) {
+            ['gig' => $gig, 'taxonomy' => $tags] = $new;
+        } else {
+            $gig = $gigs->find($gigId);
+        }
         if ($gig === null || (string) $gig['user_id'] !== (string) auth()->id()) {
             throw PageNotFoundException::forPageNotFound();
         }
+        $tags ??= $gigs->rankerTaxonomy($gigId);
 
         $matches = null;
 
         try {
-            $matches = service('matcherClient')->match(MatcherClient::gigRequest($gig, $gigs->rankerTaxonomy($gigId)));
+            $matches = service('matcherClient')->match(MatcherClient::gigRequest($gig, $tags));
         } catch (RuntimeException $e) {
             log_message('error', 'Matching gig {id} failed: {message}', ['id' => $gigId, 'message' => $e->getMessage()]);
         }
