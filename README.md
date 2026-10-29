@@ -84,6 +84,12 @@ pip install -r requirements.txt
 uvicorn app:app --port 8001   # the first run downloads the model (several hundred MB)
 ```
 
+At startup it logs the device the model runs on, e.g. `embedding model mixedbread-ai/mxbai-embed-large-v1 loaded on mps:0`, and `GET /health` reports it as `device`. Left alone, sentence-transformers picks the device (the Apple GPU, `mps`, on Apple Silicon), which on another machine or library version can quietly be the CPU. To pin it, set `EMBED_DEVICE` to `mps`, `cuda` or `cpu`; the service then refuses to start if that device isn't available:
+
+```bash
+EMBED_DEVICE=mps uvicorn app:app --port 8001
+```
+
 From PHP, `App\Libraries\ProviderEmbedder` calls it. The service URL is `embedding.baseURL` in `.env`.
 
 ```php

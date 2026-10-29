@@ -169,5 +169,75 @@ $email = static function (): string {
   </div>
 </footer>
 
+<!-- ─────────────────────────────────── form loading overlay -->
+<!--
+  A <form data-loading="message"> that is submitted (and passes validation)
+  disables its submit button, which shows a spinner, and puts this overlay up
+  with the message until the next page loads. A second submit is ignored, so a
+  slow request can't be sent twice.
+-->
+<div id="form-loading" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-navy/40 px-4 backdrop-blur-sm"
+     role="status" aria-live="polite">
+  <div class="flex max-w-sm items-center gap-4 rounded-card bg-white px-7 py-6 shadow-lg">
+    <svg class="h-7 w-7 shrink-0 animate-spin text-brand" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-25"></circle>
+      <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+    </svg>
+    <div>
+      <p class="js-form-loading-message font-semibold text-navy"></p>
+      <p class="mt-1 text-sm text-ink/60">This can take a few seconds. Please don't refresh or close the page.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var overlay = document.getElementById('form-loading');
+  var spinner = '<svg class="mr-2 inline h-4 w-4 animate-spin align-[-2px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+    + '<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-25"></circle>'
+    + '<path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path></svg>';
+
+  // Bubbling, so it runs after a page's own submit checks: a submit they cancel
+  // (e.g. an empty required rich-text field) shows nothing.
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form.matches('form[data-loading]') || e.defaultPrevented) {
+      return;
+    }
+    if (form.dataset.submitting) {
+      e.preventDefault();
+      return;
+    }
+    form.dataset.submitting = '1';
+
+    form.querySelectorAll('button[type="submit"]').forEach(function (button) {
+      button.dataset.label = button.innerHTML;
+      button.innerHTML = spinner + 'Submitting…';
+      button.disabled = true;
+      button.classList.add('cursor-wait', 'opacity-80');
+    });
+    overlay.querySelector('.js-form-loading-message').textContent = form.dataset.loading;
+    overlay.classList.remove('hidden');
+  });
+
+  // Coming back with the Back button can restore the page as it was left,
+  // mid-submit: put the form back to normal.
+  window.addEventListener('pageshow', function (e) {
+    if (!e.persisted) {
+      return;
+    }
+    overlay.classList.add('hidden');
+    document.querySelectorAll('form[data-submitting]').forEach(function (form) {
+      delete form.dataset.submitting;
+      form.querySelectorAll('button[type="submit"]').forEach(function (button) {
+        button.innerHTML = button.dataset.label;
+        button.disabled = false;
+        button.classList.remove('cursor-wait', 'opacity-80');
+      });
+    });
+  });
+})();
+</script>
+
 </body>
 </html>

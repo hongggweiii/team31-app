@@ -20,8 +20,15 @@ EMBED_DIM is the full 1024-dim output -- what the shipped ranker's dense leg
 used (features.py --dense-dim default). The model is Matryoshka-trained, so a
 smaller value (512/256/...) also works, but it must match
 app/Config/Embedding.php::$dimensions and the vector DB column.
+
+The model runs on EMBED_DEVICE (environment variable: mps, cuda or cpu). Unset,
+sentence-transformers picks the best device it finds (on Apple Silicon, mps),
+which can silently be the CPU; set, it is used or the service won't start.
 """
+import os
+
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
 
 BASE_MODEL_NAME = "mixedbread-ai/mxbai-embed-large-v1"
@@ -30,10 +37,28 @@ QUERY_PREFIX_GENERIC = "Represent this sentence for searching relevant passages:
 
 _model_cache: dict[str, SentenceTransformer] = {}
 
+_DEVICE_AVAILABLE = {
+    "mps": lambda: torch.backends.mps.is_available(),
+    "cuda": lambda: torch.cuda.is_available(),
+    "cpu": lambda: True,
+}
+
+
+def embed_device() -> str | None:
+    """EMBED_DEVICE, checked; None when unset (sentence-transformers decides)."""
+    device = os.environ.get("EMBED_DEVICE", "").strip().lower() or None
+    if device is None:
+        return None
+    if device not in _DEVICE_AVAILABLE:
+        raise RuntimeError(f"EMBED_DEVICE={device!r}: use one of {', '.join(_DEVICE_AVAILABLE)}")
+    if not _DEVICE_AVAILABLE[device]():
+        raise RuntimeError(f"EMBED_DEVICE={device!r}, but torch {torch.__version__} can't use it on this machine")
+    return device
+
 
 def _get_model(model_name: str = BASE_MODEL_NAME) -> SentenceTransformer:
     if model_name not in _model_cache:
-        _model_cache[model_name] = SentenceTransformer(model_name)
+        _model_cache[model_name] = SentenceTransformer(model_name, device=embed_device())
     return _model_cache[model_name]
 
 

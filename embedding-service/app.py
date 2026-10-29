@@ -1,7 +1,7 @@
 """
 HTTP wrapper around embedding.py, called by app/Libraries/ProviderEmbedder.php.
 
-    GET  /health            -> {"status", "model", "dimensions"}
+    GET  /health            -> {"status", "model", "dimensions", "device"}
     POST /embed/provider    body: the five provider text fields (any may be null)
                             -> {"model", "dimensions", "embedding": [float x dimensions]}
     POST /embed/providers   body: {"providers": [up to MAX_BATCH of the above]}
@@ -11,8 +11,10 @@ HTTP wrapper around embedding.py, called by app/Libraries/ProviderEmbedder.php.
 
 Run (from embedding-service/):
     uvicorn app:app --port 8001
+    EMBED_DEVICE=mps uvicorn app:app --port 8001   # pin the device: mps, cuda or cpu (see embedding.py)
 """
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -25,17 +27,19 @@ from embedding import (
 )
 
 
+log = logging.getLogger("uvicorn.error")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    _get_model()  # load once at startup so the first request doesn't pay for it
+    model = _get_model()  # load once at startup so the first request doesn't pay for it
+    log.info("embedding model %s loaded on %s (EMBED_DEVICE=%s)", BASE_MODEL_NAME, model.device,
+             os.environ.get("EMBED_DEVICE") or "unset, picked automatically")
     yield
 
 
 # Bounds one request's memory and latency; the PHP batch command pages below this.
 MAX_BATCH = 128
-
-
-log = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="SenseiGigs embedding service", lifespan=lifespan)
 
@@ -50,7 +54,7 @@ class Provider(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": BASE_MODEL_NAME, "dimensions": EMBED_DIM}
+    return {"status": "ok", "model": BASE_MODEL_NAME, "dimensions": EMBED_DIM, "device": str(_get_model().device)}
 
 
 # Plain `def` so FastAPI runs the CPU-bound encode in its threadpool instead of
