@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import subprocess
 import sys
 import threading
@@ -98,6 +99,30 @@ def env(key: str, default: str | None = None) -> str | None:
 
 EMBEDDING_URL = env("embedding.baseURL", "http://localhost:8001/").rstrip("/") + "/"
 RANKER = os.environ.get("MATCHER_CORPUS")  # unset: the app's showcases in MariaDB
+
+
+def machine() -> str:
+    """What the matcher runs on, reported in meta.machine (the app's analytics_outputs):
+    MATCHER_MACHINE if set (e.g. a cloud instance type), otherwise this machine's CPU."""
+    if os.environ.get("MATCHER_MACHINE"):
+        return os.environ["MATCHER_MACHINE"]
+    name = None
+    try:
+        if sys.platform == "win32":
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+                name = winreg.QueryValueEx(key, "ProcessorNameString")[0]
+        elif sys.platform == "darwin":
+            name = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True).stdout
+        else:
+            name = next((line.split(":", 1)[1] for line in Path("/proc/cpuinfo").read_text().splitlines()
+                         if line.startswith("model name")), None)
+    except OSError:
+        pass
+    return f"CPU: {(name or platform.processor() or 'unknown').strip()}"
+
+
+MACHINE = machine()
 
 
 # ---- matching: the ranker's per-gig steps over an in-memory catalogue ---------
@@ -452,4 +477,9 @@ async def match(req: MatchRequest, background: BackgroundTasks):
     log.info("[timing] matched gig %s in %.0f ms: embed (embedding-service) %.0f ms | candidates (BM25 + cosine + RRF + tags, "
              "%d showcases) %.0f ms | score (xgboost) %.0f ms | response %.0f ms", req.hire_id, (t4 - t0) * 1000,
              (t1 - t0) * 1000, len(cat.providers), (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000)
+    # for the app's analytics_outputs (App\Libraries\MatchRecorder)
+    out["meta"]["timing_ms"] = {"embed": round((t1 - t0) * 1000, 1), "candidates": round((t2 - t1) * 1000, 1),
+                                "score": round((t3 - t2) * 1000, 1), "response": round((t4 - t3) * 1000, 1),
+                                "total": round((t4 - t0) * 1000, 1)}
+    out["meta"]["machine"] = MACHINE
     return out

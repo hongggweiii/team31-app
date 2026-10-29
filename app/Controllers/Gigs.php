@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Models\GigModel;
 use App\Libraries\MatcherClient;
+use App\Libraries\MatchRecorder;
 use App\Libraries\Taxonomy;
 use CodeIgniter\Exceptions\PageNotFoundException;
 use CodeIgniter\HTTP\RedirectResponse;
@@ -113,12 +114,15 @@ class Gigs extends BaseController
         $tags ??= $gigs->rankerTaxonomy($gigId);
 
         $matches = null;
+        $error   = null;
 
         try {
             $matches = service('matcherClient')->match(MatcherClient::gigRequest($gig, $tags));
         } catch (RuntimeException $e) {
-            log_message('error', 'Matching gig {id} failed: {message}', ['id' => $gigId, 'message' => $e->getMessage()]);
+            $error = $e->getMessage();
+            log_message('error', 'Matching gig {id} failed: {message}', ['id' => $gigId, 'message' => $error]);
         }
+        MatchRecorder::record($gig, $matches, $error);
 
         return view('gig-matches', ['gig' => $gig, 'matches' => $matches]);
     }

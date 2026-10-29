@@ -40,6 +40,15 @@ final class RequestTimer
      */
     private static array $spans = [];
 
+    /**
+     * This request's numbers, worked out once: the report and MatchRecorder both read them.
+     *
+     * @var array{request: string, status: int, total: float, connect: float, queryMs: float,
+     *            queries: list<array{sql: string, ms: float}>, spans: array<string, float>, php: float,
+     *            action: array{float, string}|null}|null
+     */
+    private static ?array $stats = null;
+
     public static function enabled(): bool
     {
         return ! is_cli() && config(RequestTimerConfig::class)->enabled;
@@ -73,11 +82,16 @@ final class RequestTimer
     /**
      * A form post answers with a redirect, so the action the user waits for is
      * two (or more) requests. A redirect leaves its start time in the session;
-     * the request that finally renders a page reports the time since then.
+     * the request that finally renders a page reports the time since then. Each
+     * redirecting request also leaves its own numbers ($step), so that page can
+     * tell where the earlier requests' time went (MatchRecorder saves the gig's POST).
      *
-     * @return array{float, string}|null [ms, "POST /a -> GET /b"], or null when this request isn't the end of a redirect
+     * @param array{request: string, total: float, connect: float, queryMs: float, queryCount: int, php: float} $step
+     *
+     * @return array{float, string, list<array>}|null [ms, "POST /a -> GET /b", the earlier requests' $steps],
+     *                                                 or null when this request isn't the end of a redirect
      */
-    private static function action(string $request, int $status): ?array
+    private static function action(string $request, int $status, array $step): ?array
     {
         // Only a session that is already open: starting one now, after the response, would fail.
         if (session_status() !== PHP_SESSION_ACTIVE) {
@@ -87,14 +101,15 @@ final class RequestTimer
         $started = $_SESSION[self::SESSION_KEY] ?? null;
         unset($_SESSION[self::SESSION_KEY]);
         $chain = [...($started['chain'] ?? []), $request];
+        $steps = $started['steps'] ?? [];
 
         if ($status >= 300 && $status < 400) {
-            $_SESSION[self::SESSION_KEY] = ['start' => $started['start'] ?? $_SERVER['REQUEST_TIME_FLOAT'], 'chain' => $chain];
+            $_SESSION[self::SESSION_KEY] = ['start' => $started['start'] ?? $_SERVER['REQUEST_TIME_FLOAT'], 'chain' => $chain, 'steps' => [...$steps, $step]];
 
             return null;
         }
 
-        return $started === null ? null : [(microtime(true) - $started['start']) * 1000, implode(' -> ', $chain)];
+        return $started === null ? null : [(microtime(true) - $started['start']) * 1000, implode(' -> ', $chain), $steps];
     }
 
     /**
@@ -106,6 +121,38 @@ final class RequestTimer
         register_shutdown_function([self::class, 'report']);
     }
 
+    /**
+     * Called once the response has been sent; later calls return the same numbers.
+     */
+    public static function stats(): array
+    {
+        if (self::$stats !== null) {
+            return self::$stats;
+        }
+
+        $request = service('request');
+        $path    = str_replace('/index.php', '', $request->getUri()->getPath()) ?: '/';
+        $total   = (microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000;
+        $connect = self::$queries === [] ? 0.0 : (float) Database::connect()->getConnectDuration(6) * 1000;
+        $queryMs = array_sum(array_column(self::$queries, 'ms'));
+        $php     = max(0.0, $total - $connect - $queryMs - array_sum(self::$spans));
+        $name    = "{$request->getMethod()} {$path}";
+        $step    = ['request' => $name, 'total' => $total, 'connect' => $connect, 'queryMs' => $queryMs,
+            'queryCount' => count(self::$queries), 'php' => $php];
+
+        return self::$stats = [
+            'request' => $name,
+            'status'  => (int) http_response_code(),
+            'total'   => $total,
+            'connect' => $connect,
+            'queryMs' => $queryMs,
+            'queries' => self::$queries,
+            'spans'   => self::$spans,
+            'php'     => $php,
+            'action'  => self::action($name, (int) http_response_code(), $step),
+        ];
+    }
+
     public static function report(): void
     {
         $request = service('request');
@@ -115,16 +162,14 @@ final class RequestTimer
             return;
         }
 
-        $config  = config(RequestTimerConfig::class);
-        $total   = (microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000;
-        $connect = self::$queries === [] ? 0.0 : (float) Database::connect()->getConnectDuration(6) * 1000;
-        $queryMs = array_sum(array_column(self::$queries, 'ms'));
+        $config = config(RequestTimerConfig::class);
+        ['total' => $total, 'connect' => $connect, 'queryMs' => $queryMs] = $s = self::stats();
 
-        $lines = [sprintf('[timing] %s %s %d  %.0f ms total', $request->getMethod(), $path, (int) http_response_code(), $total)];
+        $lines = [sprintf('[timing] %s %d  %.0f ms total', $s['request'], $s['status'], $total)];
         $lines[] = sprintf('  %-14s %6.0f ms', 'db connect', $connect);
-        $lines[] = sprintf('  %-14s %6.0f ms  %d queries', 'db queries', $queryMs, count(self::$queries));
+        $lines[] = sprintf('  %-14s %6.0f ms  %d queries', 'db queries', $queryMs, count($s['queries']));
 
-        foreach (self::$queries as $q) {
+        foreach ($s['queries'] as $q) {
             $sql     = preg_replace('/\s+/', ' ', $q['sql']);
             $lines[] = sprintf(
                 '     %6.0f ms  %s%s',
@@ -134,16 +179,15 @@ final class RequestTimer
             );
         }
 
-        foreach (self::$spans as $name => $ms) {
+        foreach ($s['spans'] as $name => $ms) {
             $lines[] = sprintf('  %-14s %6.0f ms', $name, $ms);
         }
 
-        $lines[] = sprintf('  %-14s %6.0f ms  everything else', 'php + views', max(0.0, $total - $connect - $queryMs - array_sum(self::$spans)));
+        $lines[] = sprintf('  %-14s %6.0f ms  everything else', 'php + views', $s['php']);
         $lines[] = sprintf('  %-14s %6.0f ms', 'total', $total);
 
-        $action = self::action("{$request->getMethod()} {$path}", (int) http_response_code());
-        if ($action !== null) {
-            $lines[] = sprintf('  %-14s %6.0f ms  %s', 'action total', ...$action);
+        if ($s['action'] !== null) {
+            $lines[] = sprintf('  %-14s %6.0f ms  %s', 'action total', $s['action'][0], $s['action'][1]);
         }
 
         file_put_contents('php://stderr', implode(PHP_EOL, $lines) . PHP_EOL);
