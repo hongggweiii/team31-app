@@ -13,7 +13,9 @@ over the whole showcase catalogue, as the ranker's serve.py does:
     refined BM25 || cosine (1024-d) -> RRF k=60 -> top-50 -> 17 features, z-scored per query
         -> v5tax_tags LambdaMART -> ranked showcases
 
-Only after the response is sent is the gig's vector saved, to gig_embeddings.
+Only after the response is sent is the gig's vector saved, to gig_embeddings. A later
+request for the same gig (a revisit or refresh) reuses that vector while the gig's text
+and the embedding model are unchanged, and skips embedding-service.
 Showcase vectors are never computed here: `php spark embed:batch showcases` puts
 them in MariaDB with the records they were embedded from (fields_json), and the
 catalogue is reloaded in the background when they change.
@@ -252,7 +254,7 @@ def post_json(path: str, body: dict, timeout: float) -> dict:
 
 
 def embed_gig(gig: dict) -> tuple[np.ndarray, str]:
-    """The gig's unit-length query vector, embedded now (nothing is read from or written to MariaDB here)."""
+    """The gig's unit-length query vector, embedded now (see stored_gig_vector for the reuse)."""
     data = post_json("embed/gigs", {"gigs": [{"hire_title": gig["hire_title"], "hire_description": gig["hire_description"],
                                               "hire_description_additional_notes": None}]}, EMBED_TIMEOUT)
     return np.asarray(data["embeddings"][0], dtype=np.float32), data.get("model", "")
@@ -334,23 +336,49 @@ def catalogue_version() -> tuple:
         "(SELECT MAX(updated_at) FROM showcases) AS showcases_at")[0].values())
 
 
+def gig_fields(gig: dict) -> dict:
+    """The ranker-format record a gig is embedded from."""
+    return {"hire_title": gig["hire_title"], "hire_description": gig["hire_description"],
+            "hire_description_additional_notes": ""}
+
+
+def gig_text_hash(gig: dict) -> str:
+    return hashlib.sha256(hirer_text(gig_fields(gig)).encode()).hexdigest()
+
+
+def stored_gig_vector(gig: dict) -> np.ndarray | None:
+    """The vector save_gig_embedding stored for this gig, if its text and the embedding
+    model are unchanged since: a revisit or refresh of the matches page then skips
+    embedding-service. Any failure just means embedding it live."""
+    if not state["model"]:
+        return None
+    try:
+        rows = db_query("SELECT VEC_ToText(embedding) AS embedding FROM gig_embeddings "
+                        "WHERE gig_id = %s AND model = %s AND text_hash = %s",
+                        (gig["hire_id"], state["model"], gig_text_hash(gig)))
+    except Exception:
+        log.exception("reading the stored embedding of gig %s failed", gig["hire_id"])
+        return None
+    return np.asarray(json.loads(rows[0]["embedding"]), dtype=np.float32) if rows else None
+
+
 def save_gig_embedding(gig: dict, vector: np.ndarray, model_name: str) -> None:
     """Runs after the response has been sent: stores the gig's vector and the
     ranker-format record it was embedded from. A failure is logged, never raised."""
-    fields = {"hire_title": gig["hire_title"], "hire_description": gig["hire_description"],
-              "hire_description_additional_notes": ""}
+    fields = gig_fields(gig)
     try:
         db_query("INSERT INTO gig_embeddings (gig_id, model, text_hash, fields_json, embedding, created_at, updated_at) "
                  "VALUES (%s, %s, %s, %s, VEC_FromText(%s), NOW(), NOW()) "
                  "ON DUPLICATE KEY UPDATE model = VALUES(model), text_hash = VALUES(text_hash), "
                  "fields_json = VALUES(fields_json), embedding = VALUES(embedding), updated_at = VALUES(updated_at)",
-                 (gig["hire_id"], model_name, hashlib.sha256(hirer_text(fields).encode()).hexdigest(),
+                 (gig["hire_id"], model_name, gig_text_hash(gig),
                   json.dumps(fields, ensure_ascii=False), json.dumps(vector.tolist())))
     except Exception:
         log.exception("saving the embedding of gig %s failed", gig["hire_id"])
 
 
-state = {"catalogue": None, "version": None}
+# model: embedding-service's model name, as it last reported it (stored gig vectors must match it)
+state = {"catalogue": None, "version": None, "model": None}
 
 
 def warm_embedding_service() -> None:
@@ -359,7 +387,8 @@ def warm_embedding_service() -> None:
     EMBED_TIMEOUT, so the next real gig would get a 503. Called at startup and then
     every KEEP_WARM_SECONDS. Failures are logged: matching reports them anyway."""
     try:
-        post_json("embed/gigs", {"gigs": [{"hire_title": "warm-up", "hire_description": "warm-up"}]}, 30)
+        data = post_json("embed/gigs", {"gigs": [{"hire_title": "warm-up", "hire_description": "warm-up"}]}, 30)
+        state["model"] = data.get("model") or state["model"]
     except HTTPException as e:
         log.warning("embedding-service warm-up failed: %s", e.detail)
 
@@ -464,7 +493,12 @@ async def match(req: MatchRequest, background: BackgroundTasks):
     cat = state["catalogue"]
     gig = {"hire_id": req.hire_id, "hire_title": req.hire_title, "hire_description": req.hire_description,
            "industry": req.industry, "tags": {"categories": req.taxonomy}}
-    vector, model_name = embed_gig(gig)
+    vector = None if RANKER else stored_gig_vector(gig)
+    stored = vector is not None
+    t_read = time.perf_counter()
+    if not stored:
+        vector, model_name = embed_gig(gig)
+        state["model"] = model_name or state["model"]
     t1 = time.perf_counter()
     rows = candidates(cat, gig, vector)
     t2 = time.perf_counter()
@@ -472,14 +506,20 @@ async def match(req: MatchRequest, background: BackgroundTasks):
     t3 = time.perf_counter()
     out = response(ranked, cat, req.top_k)
     t4 = time.perf_counter()
-    if not RANKER:  # after the response is sent, outside the 5 s
+    if not RANKER and not stored:  # after the response is sent, outside the 5 s
         background.add_task(save_gig_embedding, gig, vector, model_name)
-    log.info("[timing] matched gig %s in %.0f ms: embed (embedding-service) %.0f ms | candidates (BM25 + cosine + RRF + tags, "
-             "%d showcases) %.0f ms | score (xgboost) %.0f ms | response %.0f ms", req.hire_id, (t4 - t0) * 1000,
-             (t1 - t0) * 1000, len(cat.providers), (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000)
-    # for the app's analytics_outputs (App\Libraries\MatchRecorder)
-    out["meta"]["timing_ms"] = {"embed": round((t1 - t0) * 1000, 1), "candidates": round((t2 - t1) * 1000, 1),
+    log.info("[timing] matched gig %s in %.0f ms: read stored vector (%s) %.0f ms | embed (embedding-service) %s | "
+             "candidates (BM25 + cosine + RRF + tags, %d showcases) %.0f ms | score (xgboost) %.0f ms | response %.0f ms",
+             req.hire_id, (t4 - t0) * 1000, "hit" if stored else "miss", (t_read - t0) * 1000,
+             "skipped" if stored else f"{(t1 - t_read) * 1000:.0f} ms", len(cat.providers),
+             (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000)
+    # for the app's analytics_outputs (App\Libraries\MatchRecorder). vector_read: looking
+    # for the stored vector, found or not; embed: the live call, None when it was reused.
+    out["meta"]["timing_ms"] = {"vector_read": None if RANKER else round((t_read - t0) * 1000, 1),
+                                "embed": None if stored else round((t1 - t_read) * 1000, 1),
+                                "candidates": round((t2 - t1) * 1000, 1),
                                 "score": round((t3 - t2) * 1000, 1), "response": round((t4 - t3) * 1000, 1),
                                 "total": round((t4 - t0) * 1000, 1)}
     out["meta"]["machine"] = MACHINE
+    out["meta"]["gig_vector"] = "stored" if stored else "embedded"
     return out

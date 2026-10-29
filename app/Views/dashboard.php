@@ -31,23 +31,29 @@ $ok = array_filter($runs, static fn ($r) => $r['status'] === 'ok');
 // grouped: one colour family per group, one shade per stage.
 $groups = [
     'Database' => ['connect' => ['Connect', 'bg-navy-dark'], 'queries' => ['Queries', 'bg-[#6F9BC4]']],
-    'Matcher'  => ['embed' => ['Embed', 'bg-[#C45F00]'], 'rank' => ['Rank (BM25, cosine, xgboost)', 'bg-brand'],
-                   'overhead' => ['Call overhead', 'bg-[#FFC27A]']],
+    'Matcher'  => ['read' => ['Read stored vector', 'bg-[#7A4A1E]'], 'embed' => ['Embed', 'bg-[#C45F00]'],
+                   'rank' => ['Rank (BM25, cosine, xgboost)', 'bg-brand'], 'overhead' => ['Call overhead', 'bg-[#FFC27A]']],
     'App'      => ['php' => ['PHP + views', 'bg-[#4E8A57]']],
 ];
 $stages  = array_merge(...array_values($groups));
 // Runs saved before the save request's own numbers were recorded: only its total is known.
 $stages += ['unsplit' => ['Not broken down (older runs)', 'bg-[#B8BFC7]']];
-$bars    = static function (array $r): array {
+// The matches page opened again, not straight after Submit: timed, but with no redirect chain.
+$revisit = static fn (array $r): bool => $r['action_total_ms'] === null && $r['page_total_ms'] !== null;
+$wait    = static fn (array $r): ?float => ($r['action_total_ms'] ?? $r['page_total_ms']) === null ? null : (float) ($r['action_total_ms'] ?? $r['page_total_ms']);
+$bars    = static function (array $r) use ($revisit): array {
     $v = static fn (string $c): float => (float) ($r[$c] ?? 0);
 
-    return [
+    // A revisit or refresh of the matches page has no save step.
+    return ($revisit($r) ? [] : [
         'Save gig' => $r['save_total_ms'] === null
             ? ['unsplit' => max(0.0, $v('action_total_ms') - $v('page_total_ms'))]
             : ['connect' => $v('save_connect_ms'), 'queries' => $v('save_query_ms'), 'php' => $v('save_php_ms')],
+    ]) + [
         'Matches page' => [
             'connect'  => $v('db_connect_ms'),
             'queries'  => $v('db_query_ms'),
+            'read'     => $v('matcher_vector_read_ms'),
             'embed'    => $v('matcher_embed_ms'),
             'rank'     => $v('matcher_candidates_ms') + $v('matcher_score_ms') + $v('matcher_response_ms'),
             'overhead' => max(0.0, $v('matcher_call_ms') - $v('matcher_total_ms')),
@@ -55,9 +61,9 @@ $bars    = static function (array $r): array {
         ],
     ];
 };
-$timed   = array_filter($tableRuns, static fn ($r) => $r['action_total_ms'] !== null);
+$timed   = array_filter($tableRuns, static fn ($r) => $wait($r) !== null);
 $widest  = max([1.0, ...array_map(static fn ($r) => max(array_map('array_sum', $bars($r))), $timed)]);
-$unsplit = array_filter($timed, static fn ($r) => $r['save_total_ms'] === null) !== [];
+$unsplit = array_filter($timed, static fn ($r) => $r['save_total_ms'] === null && ! $revisit($r)) !== [];
 
 // signals.taxonomy.tag_level, as on the matches page
 $levels = [0 => 'No shared tag', 1 => 'Same category', 2 => 'Same specialisation', 3 => 'Same specialisation and skill'];
@@ -151,7 +157,14 @@ $kpis = [
                   <span class="font-semibold text-ink/70">#<?= esc((string) $r['id']) ?></span><br>
                   <?= esc(date('j M, H:i', strtotime((string) $r['created_at']))) ?>
                 </td>
-                <td class="py-3 pr-4 font-semibold text-navy"><?= esc($r['gig_title']) ?></td>
+                <td class="py-3 pr-4">
+                  <p class="font-semibold text-navy"><?= esc($r['gig_title']) ?></p>
+                  <?php if ($revisit($r)): ?>
+                    <span class="mt-1.5 inline-block rounded-full border border-navy/15 px-2.5 py-0.5 text-xs text-ink/60" title="Matches page opened again or refreshed: no save step">Refresh</span>
+                  <?php elseif ($r['action_total_ms'] !== null): ?>
+                    <span class="mt-1.5 inline-block rounded-full bg-brand/10 px-2.5 py-0.5 text-xs font-semibold text-brand" title="Gig submitted, then its matches page">Submission</span>
+                  <?php endif; ?>
+                </td>
                 <td class="py-3 pr-4">
                   <?php if ($r['status'] !== 'ok'): ?>
                     <p class="text-xs text-red-700"><?= esc((string) $r['error']) ?></p>
@@ -186,7 +199,7 @@ $kpis = [
                   <?php endif; ?>
                 </td>
                 <td class="py-3 pr-4">
-                  <?php if ($r['action_total_ms'] === null): ?>
+                  <?php if ($wait($r) === null): ?>
                     <span class="text-xs text-ink/50">Not recorded</span>
                   <?php else: ?>
                     <?php foreach ($bars($r) as $bar => $parts): ?>
@@ -206,12 +219,15 @@ $kpis = [
                     <?php endforeach; ?>
                     <?php if ($r['matcher_call_ms'] !== null): ?>
                       <p class="mt-1 pl-[5.5rem] text-xs text-ink/50">
-                        matching <?= esc($sec((float) $r['matcher_call_ms'])) ?>, of which embed <?= esc($sec((float) $r['matcher_embed_ms'])) ?>
+                        matching <?= esc($sec((float) $r['matcher_call_ms'])) ?>,
+                        <?= $r['matcher_embed_ms'] === null
+                            ? 'stored vector reused (read ' . esc($sec((float) $r['matcher_vector_read_ms'])) . ')'
+                            : 'of which embed ' . esc($sec((float) $r['matcher_embed_ms'])) ?>
                       </p>
                     <?php endif; ?>
                   <?php endif; ?>
                 </td>
-                <td class="py-3 pr-4 text-right font-semibold text-navy"><?= esc($sec($r['action_total_ms'] === null ? null : (float) $r['action_total_ms'])) ?></td>
+                <td class="py-3 pr-4 text-right font-semibold text-navy"><?= esc($sec($wait($r))) ?></td>
                 <td class="py-3 pr-4 truncate text-xs text-ink/60" title="<?= esc((string) ($r['matcher_machine'] ?? '')) ?>"><?= esc($machine($r['matcher_machine'])) ?></td>
                 <td class="py-3 text-center">
                   <?php if ($r['status'] === 'ok'): ?>

@@ -40,6 +40,7 @@ final class DashboardTest extends CIUnitTestCase
         $result->assertSee('CPU: Test 1');
         $result->assertSee('Interim CFO');
         $result->assertSee('Fractional CFO');
+        $result->assertSee('Submission');
     }
 
     public function testRunsTableShowsTenRunsAPage(): void
@@ -59,6 +60,22 @@ final class DashboardTest extends CIUnitTestCase
         $result->assertSee('Runs 11');
         $result->assertSee('Gig number 2');
         $result->assertDontSee('Gig number 3<');
+    }
+
+    public function testRevisitShowsOnlyTheMatchesPage(): void
+    {
+        $admin = fake(UserModel::class);
+        $admin->addGroup('admin');
+        $gigId = (new GigModel())->insert(['user_id' => $admin->id, 'title' => 'Interim CFO', 'summary' => 'Lead finance.']);
+        $this->db->table('analytics_outputs')->insert(['gig_id' => $gigId, 'status' => 'ok', 'matcher_total_ms' => 800,
+            'page_total_ms' => 1800, 'created_at' => '2026-10-29 12:00:00']);
+
+        $result = $this->actingAs($admin)->get('admin/dashboard');
+
+        $result->assertSee('Refresh');
+        $result->assertSee('Matches page');
+        $result->assertDontSee('Save gig');
+        $result->assertSee('1.8 s');
     }
 
     public function testOtherUsersAreTurnedAway(): void
