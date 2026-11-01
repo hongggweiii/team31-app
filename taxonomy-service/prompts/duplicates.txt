@@ -1,0 +1,6 @@
+TASK
+New terms have been proposed for the taxonomy above. For each one, decide whether it means the same as a name that already exists: a skill or specialisation in the taxonomy (the same kind as the term), or one of the other pending terms listed.
+
+"The same" means a synonym, an abbreviation or its expansion (AML / Anti-Money Laundering), a spelling variant, or the same words reordered. A broader, narrower or merely related term is NOT the same (Tax Planning is not Tax Computation; Cloud Security is not Cloud Computing).
+
+For each term return its "key" and "same_as": the existing name copied exactly, or null when nothing means the same.

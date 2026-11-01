@@ -125,6 +125,7 @@ _modules/*
 /results/
 /phpunit.xml
 
-# Embedding service (Python)
+# Python services
 /embedding-service/.venv/
+/taxonomy-service/.venv/
 __pycache__/

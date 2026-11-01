@@ -156,6 +156,7 @@ class Showcases extends BaseController
             return redirect()->back()->withInput()
                 ->with('errors', $showcases->errors() ?: ['showcase' => 'Your showcase could not be saved. Please try again.']);
         }
+        $this->attachSuggestedTerms('showcase', $showcaseId);
 
         return redirect()->to(url_to('showcase-new'))->with('message', 'Your showcase has been published.');
     }
