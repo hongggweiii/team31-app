@@ -82,6 +82,7 @@ class Gigs extends BaseController
             return redirect()->back()->withInput()
                 ->with('errors', $gigs->errors() ?: ['gig' => 'Your gig could not be saved. Please try again.']);
         }
+        $this->attachSuggestedTerms('gig', $gigId);
 
         return redirect()->to(url_to('gig-matches', $gigId))
             ->with('message', 'Your gig has been posted.')

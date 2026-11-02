@@ -15,6 +15,7 @@ app/
 public/         web docroot (only folder exposed to the browser)
 embedding-service/  Python: turns showcases and gigs into vectors (port 8001)
 matcher/        Python: live gig -> showcase matching with the ranker's pipeline (port 8002)
+taxonomy-service/  Python: AI tag suggestion and the review of new taxonomy terms (port 8003)
 writable/       runtime output (logs, cache, sessions)
 tests/          PHPUnit tests
 spark           CI4 CLI tool
@@ -196,6 +197,49 @@ Both forms tag a gig / showcase as the Data team's records do: up to 2 **categor
   ```
 
 - The forms' taxonomy picker is cached for a day (`Taxonomy::cachedTree()`); `taxonomy:import` clears it. After editing the `sf_*` tables by hand (e.g. in Layerbase), run `php spark cache:clear`.
+
+## Taxonomy governance (`taxonomy-service/`)
+
+AI suggests SkillsFuture tags for a gig or showcase (Technical Brief §10-11). A term the taxonomy doesn't have is shown to the user straight away but is never added to it: it is stored in `taxonomy_proposals` as `pending_review`, with its source, the model's confidence and the gig / showcase it was suggested for, until it is approved or rejected on the taxonomy dashboard. Duplicates and synonyms among pending terms are flagged first.
+
+```
+POST /suggest     gig / showcase text -> one OpenAI call (gpt-4o-mini, structured output) with the whole taxonomy in the prompt
+                  -> each name looked up: exact, else Levenshtein >= 85% (POST /lookup; brief §9.2, §10.3)
+                  -> found: "tags", in Taxonomy::tags()'s shape plus ids     not found: "pending", stored as pending_review
+after the response, each new pending term is screened against the taxonomy and every other pending term:
+                  exact (same name, ignoring case / spacing / trailing punctuation), fuzzy (Levenshtein >= 85%),
+                  synonym (asked of the model: abbreviations, synonyms, reworded names)
+approve           -> added to the sf_* tables (a skill of that name elsewhere is linked, not duplicated) and tagged on
+                     every gig / showcase holding it, within the forms' caps
+reject            -> soft-deleted (status rejected, deleted_at), so detached from every gig / showcase holding it,
+                     and a user_notifications row for each affected user
+```
+
+Identical pending terms (same kind, parent and name) are decided together. Pending terms are never in the sf_* tables or a gig's / showcase's tags, so `matcher/` only ever sees approved ones. Synonyms are judged by the model because embedding similarity can't tell them apart: on the 825 skills, "Anti-Money Laundering" ~ "AML Compliance" scores 0.62 with mxbai, below "Cloud Computing" ~ "Cloud Security" at 0.84. The taxonomy sits at the start of both prompts so OpenAI's prompt caching serves it after the first call.
+
+Run it alongside `php spark serve` after `php spark migrate` (it creates `taxonomy_proposals` and `user_notifications`). It reads the database, `OPENAI_API_KEY` and the `taxonomy.*` settings from this `.env`:
+
+```bash
+cd taxonomy-service
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn app:app --port 8003
+```
+
+`taxonomy-service/app.py` documents every endpoint. Another site can use the service the same way: it needs the two tables and its own copy of the taxonomy, and calls the endpoints from its backend. The prompts are in `taxonomy-service/prompts/` and can be edited without code changes (restart the service). If OpenAI fails or times out, `/suggest` answers 503 and the caller keeps its manual picker.
+
+On the **create-gig and create-profile forms**, "Suggest tags with AI" (in the taxonomy picker) posts the form as filled in so far to `TagSuggestions` (`POST /tag-suggestions`): a gig's title, summary and notes, or a showcase's headline, bio, services and achievements (the text it is embedded from). The taxonomy's tags are ticked in the picker for the user to adjust; terms it lacks are shown as "pending review" and, when the gig / showcase is saved, linked to it (`/proposals/attach`). If the service is down the user is told so and picks tags by hand.
+
+The **taxonomy dashboard** (`/taxonomy-dashboard`, for any logged-in user) is the review interface, through `App\Libraries\TaxonomyClient`:
+
+- *Proposals*: the pending queue, with each term's duplicate check (flag, closest match, similarity) and the other rows holding the same term. Approve or reject one row or the ticked rows; a rejection reason goes to the users notified.
+- *Taxonomy*: browse and search the SkillsFuture tree with how many gigs and showcases use each item; add, rename, or remove what nothing uses (removing an item in use would untag gigs and showcases through the FK cascades). After each edit the service re-checks pending terms.
+
+Check the service without touching the database (a throwaway SQLite copy, OpenAI faked; covers the brief's §14 cases):
+
+```bash
+cd taxonomy-service && .venv/bin/python check_service.py
+.venv/bin/python check_service.py --live   # real OpenAI calls on the full sf_v1 taxonomy from ../../ranker
+```
 
 ## Adding a page
 

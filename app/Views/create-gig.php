@@ -96,7 +96,7 @@ $err = static function (string $field) use ($errors): string {
   </section>
 
   <!-- ── category, specialisations, search tags ─────── -->
-  <?php require __DIR__ . '/partials/taxonomy-picker.php'; ?>
+  <?php $suggestType = 'gig'; require __DIR__ . '/partials/taxonomy-picker.php'; ?>
 
   <!-- ── submit ─────────────────────────────────────── -->
   <div class="<?= $cardCls ?>">

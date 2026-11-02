@@ -3,6 +3,7 @@
 namespace Config;
 
 use App\Libraries\MatcherClient;
+use App\Libraries\TaxonomyClient;
 use CodeIgniter\Config\BaseService;
 
 /**
@@ -42,5 +43,18 @@ class Services extends BaseService
         }
 
         return new MatcherClient();
+    }
+
+    /**
+     * Calls taxonomy-service/ (the taxonomy dashboard). A service so tests can
+     * swap in a fake.
+     */
+    public static function taxonomyClient(bool $getShared = true): TaxonomyClient
+    {
+        if ($getShared) {
+            return static::getSharedInstance('taxonomyClient');
+        }
+
+        return new TaxonomyClient();
     }
 }
