@@ -1,0 +1,3 @@
+pymysql>=1.1        # database and lifecycle checks
+pyyaml>=6           # reads ../openapi/*.yaml
+jsonschema>=4.18    # validates responses against them (with referencing)

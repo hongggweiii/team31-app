@@ -1,0 +1,40 @@
+ID,Area,Priority,Test,Preconditions,Steps,Expected result,Automated by,Result,Notes
+TC-A1,Setup,P0,Database version and tables,Staging database,"Run sql/ scripts as in sql/README.md, then check.py database",MariaDB 11.7+; all 10 tables exist; id types match,database D1-D4,,
+TC-A2,Setup,P0,Taxonomy loaded,A1 done,Load the seed (data-setup.md); run check.py database,"All four sf_* tables filled with the seed's counts (data-setup.md, step 2); D5 passes",database D5,,
+TC-A3,Setup,P0,Services start and report health,engine.env filled in,Start embedding-service then matcher; GET /health on both,Both 200; embedding reports model and device; matcher reports providers and ranker_version,"services E1, M1",,
+TC-A4,Setup,P1,Matcher starts on an empty catalogue,No showcase embedded yet,Start the matcher; POST /match with a valid gig,"Starts normally; /health providers = 0; /match 200 with results [] and meta.catalogue_size 0; check.py services: M2 warns, M14 is skipped",services M2-M5,,Fresh installs start here
+TC-A5,Setup,P0,Service contract,A3 done,Run check.py services,No FAIL (M2/M14 may warn while the catalogue is empty),"services E1-E9, M1-M14",,
+TC-B1,Showcases,P0,"Text, hash and record built like ours",Your showcase-to-engine code written,Produce fixture output (testing/README.md); run check.py fixtures,All showcase cases PASS,fixtures,,
+TC-B2,Showcases,P0,Publishing a showcase embeds it,Staging app,Publish a new showcase; run your embedding job,"A showcase_embeddings row appears with model, text_hash, fields_json; D11 and D13 pass",database D9-D13,,
+TC-B3,Showcases,P0,New showcase becomes matchable without restart,B2 done,Wait 30 s; post a gig in the new showcase's field,Matcher /health providers +1; the showcase can appear in results,lifecycle L3,,
+TC-B4,Showcases,P0,Editing a profile re-embeds it; unchanged saves don't,"Published, embedded profile; embedding job scheduled","Run check.py lifecycle --showcase-id <id> and follow its step 1; separately, save the profile without changes","Edit: new text_hash within the job's schedule (L1). Unchanged save: text_hash and embedding unchanged, updated_at re-stamped",lifecycle L1,,Fails silently if updated_at isn't bumped or the clocks differ
+TC-B5,Showcases,P0,Unpublishing removes it from matches,"Published, embedded showcase",Unpublish it in your app (check.py lifecycle step 2); wait 30 s,It no longer appears in any results; providers -1,lifecycle L2,,
+TC-B6,Showcases,P1,Deleting removes its tags and embedding,Showcase with tags and embedding,Delete it,"Its showcase_specialisations, showcase_skills and showcase_embeddings rows are gone (cascade)",,,
+TC-B7,Showcases,P1,"Rich text, entities, non-English text",Showcase form,"Save a showcase with lists, line breaks, &amp;, emoji, Malay/Chinese text",fields_json holds plain text as in fixtures 9002/9005; D11 passes,"fixtures, database D11",,
+TC-B8,Showcases,P2,Very long bio,Showcase form,Save a bio of several thousand words,Embeds without error (text beyond 512 tokens is ignored by the model),,,
+TC-B9,Showcases,P1,Tags stay within limits,Showcase form,"Try more than 2 categories, 3 specialisations per category, 8 skills per specialisation",Your form refuses it; D6 shows no warning,database D6,,
+TC-B10,Showcases,P1,A category without a specialisation is refused,Showcase form,Tick a category but none of its specialisations; submit,Your form refuses it (categories are only stored through specialisations),,,
+TC-B11,Showcases,P0,Editing only a service or achievement re-embeds the profile,"Published, embedded profile with services",Change only one service title in your app; let the embedding job run,The profile's updated_at was bumped and its fields_json shows the new title,,,"Manual: if updated_at isn't bumped, no automated check can see it (integration-guide G3)"
+TC-B12,Showcases,P0,Hidden profiles are never matched,Published profile,"Soft-delete it, suspend its user, or hide it any other way your app can; wait 30 s; post a matching gig",It never appears in results; the showcases view reports it as not 'published',,,Check every way your app can hide a profile
+TC-B13,Showcases,P1,Timestamps on one clock,Database and app time zones known,Run check.py database,D16: database time zone noted; lifecycle L1 passes,"database D16, lifecycle L1",,See integration-guide G2 'One clock'
+TC-C1,Matching,P0,Match request built like ours,Your gig-to-/match code written,Produce fixture output; run check.py fixtures,All gig cases PASS,fixtures,,
+TC-C2,Matching,P0,Posting a gig shows ranked experts,Catalogue not empty,Post a gig; open its matches page,"Up to 10 experts in rank order, best first",,,
+TC-C3,Matching,P1,Results make sense,Catalogue with several fields,"Post a finance gig, then a software gig",Each one's top results are mostly from its own field,,,Rankings are not compared with ours
+TC-C4,Matching,P1,Refresh gives the same order,C2 done,Reload the matches page twice,Same experts in the same order,services M7,,
+TC-C5,Matching,P1,Untagged gig,Gig form,Post a gig with no tags (if your form allows),Still ranked; request has taxonomy [],fixtures 9102,,
+TC-C6,Matching,P0,Only the gig's owner sees its matches,Two user accounts,Open another user's gig matches URL,Not found / forbidden,,,
+TC-C7,Matching,P1,Gig vector saved,CHECK_GIG_ID set,Run check.py services,M14 passes,services M14,,
+TC-C8,Matching,P1,Recently hidden profiles are filtered from the page,Two browser tabs,Unpublish a profile and within 30 s open a gig's matches page where it ranked,It isn't shown (your page checks each result against your own data),,,
+TC-D1,Errors,P0,Embedding service down,Matches page,Stop embedding-service; open a gig's matches page,"Friendly 'matching unavailable, try again' message with a retry; no error page; gig still saved",,,Matcher answers 503
+TC-D2,Errors,P0,Matcher down or slow,Matches page,Stop the matcher (or block its port); open the matches page,Same friendly message after at most your timeout (5 s); no error page,,,
+TC-D3,Errors,P1,Invalid request,Your matcher client,Send a gig with empty title and description,"Matcher answers 422; your page explains, offers no retry",services M10,,
+TC-D4,Errors,P1,No showcases published yet,Empty catalogue,Open a gig's matches page,"'No providers have published a showcase yet' (meta.catalogue_size 0), not 'no relevant experts'",services M4,,
+TC-D5,Errors,P2,Unexpected matcher answer,Your matcher client,Point it at a URL returning HTML or a 200 without results,Handled like D1; logged,,,
+TC-D6,Errors,P1,Double submit,Gig form,Double-click submit on a slow connection,Exactly one gig is created,,,
+TC-D7,Errors,P2,Parallel users,Catalogue not empty,Open 8-10 matches pages at once,All load; none fail (matcher queues requests),services M13,,
+TC-D8,Errors,P2,Burst of matches,Catalogue not empty,Fire 100 match requests at once (load tool),"All answer, or the late ones show 'unavailable' rather than an error page; record how many exceed 5 s",,,Matcher capacity ~14/s (integration-guide G6)
+TC-E1,Operations,P1,Latency,Production-like setup,Post 100 gigs (script or load tool); time submit to matches page,Record p50/p95; agree the target (e.g. under 4 s). A single /match should take well under 1 s,services M8,,
+TC-E2,Operations,P1,Services not public,Deployed,Try ports 8001/8002 from outside your network,Not reachable,,,
+TC-E3,Operations,P1,Embedding backlog,Deployed,Run check.py database after a day of use,D12: every published showcase embedded,database D12,,
+TC-E4,Operations,P2,Restart recovery,Deployed,"Restart the matcher, then embedding-service, while the site is up",Pages show the friendly message during restarts and recover without manual steps,,,
+TC-E5,Operations,P2,Model never mixed,After any re-embedding,Run check.py database,D8: one model for every vector,database D8,,

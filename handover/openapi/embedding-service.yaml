@@ -1,0 +1,273 @@
+openapi: 3.1.0
+info:
+  title: SenseiGigs embedding service
+  version: 0.1.0
+  description: |
+    Turns showcase (provider) and gig text into 1024-dimension vectors with
+    `mixedbread-ai/mxbai-embed-large-v1`, using the ranker's exact recipe, so the
+    vectors match the ones the ranking model was trained on.
+
+    Source: `embedding-service/app.py` and `embedding-service/embedding.py`.
+
+    **Who calls it**
+    - **Your app** calls `POST /embed/providers` (or `/embed/provider`) when a
+      showcase is published or its text changes, and stores the vector in
+      `showcase_embeddings` (see `integration-guide.md`).
+    - **The matcher** calls `POST /embed/gigs` for every `/match` request, and
+      `POST /embed/providers` for skill names. Your app does not need to embed gigs.
+
+    **Behaviour**
+    - Every vector is unit length (cosine-ready), 1024 floats.
+    - Provider text gets no prefix (document side). Gig text gets the query
+      prefix `Represent this sentence for searching relevant passages: ` (query
+      side). Never embed a gig as a provider or the reverse.
+    - Text is built from the fields in a fixed order, skipping empty ones; send
+      plain text (strip HTML first). Text beyond the model's 512-token limit is
+      truncated by the model.
+    - Same input, same model and same device: the same vector, bit for bit.
+    - Internal service: no authentication. Do not expose it to the internet.
+    - The model (335M parameters, about 1.3 GB in float32) loads at startup. After a long idle
+      period, the first call can take a few seconds.
+servers:
+  - url: http://localhost:8001
+    description: Default local port (`uvicorn app:app --port 8001`)
+paths:
+  /health:
+    get:
+      summary: Service status
+      operationId: health
+      responses:
+        "200":
+          description: The service is up and the model is loaded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example:
+                status: ok
+                model: mixedbread-ai/mxbai-embed-large-v1
+                dimensions: 1024
+                device: mps:0
+  /embed/provider:
+    post:
+      summary: Embed one showcase (provider)
+      operationId: embedProvider
+      description: |
+        The five provider fields are joined with single spaces in the order
+        listed (empty ones skipped) and embedded without a prefix.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Provider"
+            example:
+              about_title: Fractional CFO for growth-stage startups
+              about_description: I help Series A-B companies build finance functions, from monthly close to board reporting.
+              services_offered_title: Financial planning and analysis; Fundraising support
+              services_offered_description: Three-statement models, budgets and investor data rooms.
+              relevant_experience: Led the finance team through a S$40m Series B. Set up FP&A at two SaaS firms.
+      responses:
+        "200":
+          description: The vector.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SingleEmbedding"
+        "422":
+          $ref: "#/components/responses/Invalid"
+  /embed/providers:
+    post:
+      summary: Embed many showcases (providers)
+      operationId: embedProviders
+      description: |
+        Same as `/embed/provider`, for 1 to 128 showcases in one call. The vectors
+        come back in input order. Use this for backfills and scheduled
+        re-embedding; send larger sets in pages of up to 128.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderBatch"
+      responses:
+        "200":
+          description: One vector per provider, in input order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchEmbeddings"
+        "422":
+          $ref: "#/components/responses/Invalid"
+  /embed/gigs:
+    post:
+      summary: Embed many gigs (query side)
+      operationId: embedGigs
+      description: |
+        The three gig fields are joined like the provider fields and embedded
+        with the query prefix. 1 to 128 gigs per call; vectors in input order.
+        The matcher calls this for every match. Your app normally does not.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GigBatch"
+            example:
+              gigs:
+                - hire_title: Interim CFO for a pre-Series B fintech
+                  hire_description: We need an experienced finance lead for 3 months to prepare our Series B data room.
+                  hire_description_additional_notes: null
+      responses:
+        "200":
+          description: One vector per gig, in input order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchEmbeddings"
+        "422":
+          $ref: "#/components/responses/Invalid"
+components:
+  responses:
+    Invalid:
+      description: |
+        The request is invalid. Two shapes:
+        - The body doesn't match the schema (wrong types, missing `providers` /
+          `gigs`): FastAPI's validation error, `detail` is a list.
+        - A batch is empty or over 128 items, or an item has no text in any
+          field: `detail` is a string, e.g. `"Send between 1 and 128 providers"`
+          or `"All provider text fields are empty at index [3]"`.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [detail]
+            properties:
+              detail:
+                oneOf:
+                  - type: string
+                  - type: array
+                    items:
+                      $ref: "#/components/schemas/ValidationError"
+          example:
+            detail: All provider text fields are empty at index [3]
+  schemas:
+    Health:
+      type: object
+      required: [status, model, dimensions, device]
+      properties:
+        status:
+          type: string
+          const: ok
+        model:
+          type: string
+          description: The embedding model. Store it in `showcase_embeddings.model`.
+        dimensions:
+          type: integer
+          const: 1024
+        device:
+          type: string
+          description: |
+            Where the model runs, e.g. `cpu`, `cuda:0`, `mps:0`. Chosen
+            automatically, or set with the `EMBED_DEVICE` environment variable
+            (`cpu`, `cuda` or `mps`).
+    Provider:
+      type: object
+      description: |
+        A showcase in the ranker's provider format. Every field is optional, but
+        at least one must contain text. How to fill each field from a showcase is
+        in `integration-guide.md`.
+      properties:
+        about_title:
+          type: [string, "null"]
+          description: The showcase headline.
+        about_description:
+          type: [string, "null"]
+          description: The bio, as plain text.
+        services_offered_title:
+          type: [string, "null"]
+          description: The services' titles, joined.
+        services_offered_description:
+          type: [string, "null"]
+          description: The services' descriptions, joined.
+        relevant_experience:
+          type: [string, "null"]
+          description: Relevant achievements, joined into one paragraph.
+    ProviderBatch:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/Provider"
+    Gig:
+      type: object
+      description: A gig in the ranker's hirer format. At least one field must contain text.
+      properties:
+        hire_title:
+          type: [string, "null"]
+        hire_description:
+          type: [string, "null"]
+        hire_description_additional_notes:
+          type: [string, "null"]
+    GigBatch:
+      type: object
+      required: [gigs]
+      properties:
+        gigs:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/Gig"
+    Vector:
+      type: array
+      description: A unit-length vector. Store it with `VEC_FromText('[...]')`.
+      minItems: 1024
+      maxItems: 1024
+      items:
+        type: number
+    SingleEmbedding:
+      type: object
+      required: [model, dimensions, embedding]
+      properties:
+        model:
+          type: string
+          example: mixedbread-ai/mxbai-embed-large-v1
+        dimensions:
+          type: integer
+          const: 1024
+        embedding:
+          $ref: "#/components/schemas/Vector"
+    BatchEmbeddings:
+      type: object
+      required: [model, dimensions, embeddings]
+      properties:
+        model:
+          type: string
+          example: mixedbread-ai/mxbai-embed-large-v1
+        dimensions:
+          type: integer
+          const: 1024
+        embeddings:
+          type: array
+          description: One vector per input item, in input order.
+          items:
+            $ref: "#/components/schemas/Vector"
+    ValidationError:
+      type: object
+      required: [loc, msg, type]
+      properties:
+        loc:
+          type: array
+          items:
+            oneOf:
+              - type: string
+              - type: integer
+        msg:
+          type: string
+        type:
+          type: string

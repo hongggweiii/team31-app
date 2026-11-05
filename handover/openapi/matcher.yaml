@@ -1,0 +1,327 @@
+openapi: 3.1.0
+info:
+  title: SenseiGigs matcher
+  version: 0.1.0
+  description: |
+    Ranks every published, embedded showcase for one gig, with the ranker's own
+    pipeline and model. The request and response follow the ranker's contract
+    (`ranker/API_IO_SPEC.md`, worked example `ranker/example_io.json`).
+
+    Source: `matcher/app.py`; pipeline in `matcher/pipeline/`, pinned by `matcher/RANKER_VERSION`.
+
+    **What happens in a request**
+    1. The gig is embedded live by embedding-service (`POST /embed/gigs`, 3 s timeout).
+    2. Refined BM25 and cosine similarity run over the whole catalogue, are fused
+       with RRF (k=60), and the top 50 become candidates.
+    3. 17 features per candidate, z-scored within the request, are scored by the
+       LambdaMART model (XGBoost). The best `top_k` are returned.
+    4. After the response is sent, the gig's vector is saved to `gig_embeddings`.
+
+    **The catalogue** is the showcases with `status = 'published'` and a
+    `showcase_embeddings` row whose `fields_json` is not null, with their
+    `showcase_specialisations` / `showcase_skills` tags. It loads at startup and
+    reloads in the background within about 30 s of any change. Requests never wait for it.
+
+    **Calling it from your app**
+    - Allow at least 5 s. A typical match takes 0.1-0.5 s with about 3,000
+      showcases; the first call after a long idle period can take longer.
+    - Handle every outcome on the page, never with an error page:
+      - 200 with results: show them. 200 with empty `results`: check
+        `meta.catalogue_size`. 0 means nothing is published and embedded yet
+        ("no experts yet"); more than 0 means no showcase matched ("no relevant
+        experts"). Never infer which from the empty list alone.
+      - 422: the request is invalid (e.g. no text). Retrying won't help; log it.
+      - 503, any other status, a timeout or a connection error: say "matching is
+        unavailable, please try again" and offer a retry.
+      Our reference handling is `App\Libraries\MatcherClient` (it classifies
+      failures as a `MatcherException`) and `app/Views/gig-matches.php`.
+    - Requests are processed one at a time. Parallel calls queue; they do not fail.
+    - Internal service: no authentication. Do not expose it to the internet.
+servers:
+  - url: http://localhost:8002
+    description: Default local port (`uvicorn app:app --port 8002`)
+paths:
+  /health:
+    get:
+      summary: Service status
+      operationId: health
+      responses:
+        "200":
+          description: The service is up and the catalogue is loaded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example:
+                status: ok
+                corpus: mariadb
+                providers: 3035
+                ranker: v5tax_tags_xgb.json
+                ranker_version: e50fa4c85b5bccbe05cb4ae50179e3d02ce44b25
+  /match:
+    post:
+      summary: Rank showcases for a gig
+      operationId: match
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MatchRequest"
+            example:
+              hire_id: 42
+              hire_title: Interim CFO for a pre-Series B fintech
+              hire_description: "We need an experienced finance lead for 3 months to prepare our Series B data room, rebuild the forecast and manage the audit. Deliverable: investor-ready financials. Engagement duration: 12 weeks."
+              industry: null
+              taxonomy:
+                - name: Accountancy
+                  group: null
+                  specialisations:
+                    - name: Financial Accounting
+                      search_tag: Financial Accounting (Accountancy)
+                      skills: [Capital Raising, Financial Planning, Financial Reporting]
+              top_k: 10
+      responses:
+        "200":
+          description: |
+            The ranked showcases, best first. It has fewer than `top_k` items
+            when the catalogue is smaller. When `results` is empty,
+            `meta.catalogue_size` says why: 0 means nothing is published and
+            embedded yet (the matcher starts and answers normally with an empty
+            catalogue, without calling embedding-service).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchResponse"
+        "422":
+          description: |
+            The request is invalid; retrying it unchanged won't help:
+            - a missing or wrongly typed field, or `top_k` outside 1-50;
+            - `hire_title` and `hire_description` both empty or only whitespace;
+            - a taxonomy category or specialisation without a `name`, or an empty
+              name or skill.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+        "503":
+          description: |
+            The gig could not be embedded: embedding-service is down, timed out
+            (3 s) or failed. Temporary: retry later.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [detail]
+                properties:
+                  detail:
+                    type: string
+              example:
+                detail: "embedding-service unavailable: <urlopen error [Errno 61] Connection refused>"
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, corpus, providers, ranker, ranker_version]
+      properties:
+        status:
+          type: string
+          const: ok
+        corpus:
+          type: string
+          description: "`mariadb` in production. A path when started with `MATCHER_CORPUS` (the ranker's own corpus, for parity checks)."
+        providers:
+          type: integer
+          description: Showcases in the catalogue. 0 means nothing is published and embedded yet, so every match returns empty `results`.
+        ranker:
+          type: string
+          description: The model file.
+        ranker_version:
+          type: string
+          description: The ranker commit the pipeline was copied from.
+    MatchRequest:
+      type: object
+      required: [hire_id, hire_title, hire_description]
+      properties:
+        hire_id:
+          type: integer
+          description: Your gig's id. The gig's vector is saved under it in `gig_embeddings`, so it must exist in your `gigs` table.
+        hire_title:
+          type: string
+          description: The gig title, trimmed.
+        hire_description:
+          type: string
+          description: The gig description as plain text, trimmed. See `integration-guide.md` for which of your fields go here.
+        industry:
+          type: [string, "null"]
+          description: Not used by the current model. Send null.
+        taxonomy:
+          type: array
+          description: |
+            The gig's SkillsFuture tags. Send `[]` for an untagged gig: it is
+            still ranked, without the tag features. Order doesn't matter, and
+            only the names are used for ranking (`group` and `search_tag` are
+            informational).
+          items:
+            $ref: "#/components/schemas/TaxonomyCategory"
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 10
+          description: How many results to return.
+    TaxonomyCategory:
+      type: object
+      description: |
+        Names are matched exactly against the showcases' tags, and are not
+        checked against the `sf_*` tables: a misspelt name is accepted but earns
+        no tag credit. Always send names read from the `sf_*` tables.
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: "`sf_categories.name`, exactly."
+        group:
+          type: [string, "null"]
+          description: "`sf_categories.group_name`."
+        specialisations:
+          type: array
+          default: []
+          items:
+            type: object
+            required: [name]
+            properties:
+              name:
+                type: string
+                minLength: 1
+                description: "`sf_specialisations.name`, exactly."
+              search_tag:
+                type: [string, "null"]
+                description: '"<specialisation> (<category>)". Display only; not used for ranking.'
+              skills:
+                type: array
+                default: []
+                description: "`sf_skills.name` values chosen for this specialisation, exactly. May be empty."
+                items:
+                  type: string
+                  minLength: 1
+    MatchResponse:
+      type: object
+      required: [results, meta]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/Match"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    Match:
+      type: object
+      required: [rank, provider_id, score, raw_margin, provider, signals]
+      properties:
+        rank:
+          type: integer
+          minimum: 1
+          description: 1, 2, 3, ... in order.
+        provider_id:
+          type: integer
+          description: The showcase's id (`showcases.id`).
+        score:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: |
+            The model's margin min-max scaled to 0-100 within this request: the
+            best candidate is always 100 and the worst of the 50 candidates 0. It
+            ranks within one gig only. It is not a probability or a match
+            percentage, and scores can't be compared across gigs.
+        raw_margin:
+          type: number
+          description: The model's raw output, which determines the order.
+        provider:
+          type: object
+          description: Display hints taken from the embedded record. Prefer your own showcase data for display.
+          properties:
+            display_title:
+              type: [string, "null"]
+              description: The embedded `about_title` (the headline).
+            industry:
+              type: [string, "null"]
+            bio_excerpt:
+              type: string
+              description: The first 200 characters of the embedded `about_description`.
+        signals:
+          type: object
+          description: The model's inputs for this candidate, after z-scoring. For debugging and explanations.
+          properties:
+            retrieval:
+              type: object
+              description: bm25_score, bm25_rank, dense_cosine, dense_rank, rrf_score, rrf_rank.
+              additionalProperties:
+                type: number
+            business_fit:
+              type: object
+              description: budget_fit, seniority_fit, avail_immediacy. Always 0 for the current model (trained with them zeroed).
+              additionalProperties:
+                type: number
+            taxonomy:
+              type: object
+              description: tag_level, has_tags_gig, has_tags_prov, cat_any, spec_cov, skill_cov, skill_idf_cov, skill_soft.
+              additionalProperties:
+                type: number
+    Meta:
+      type: object
+      required: [catalogue_size, candidate_pool, returned]
+      properties:
+        pipeline:
+          type: string
+        normalization:
+          type: string
+        n_features:
+          type: integer
+          const: 17
+        features:
+          type: array
+          items:
+            type: string
+        catalogue_size:
+          type: integer
+          description: |
+            Showcases the matcher ranked against (published and embedded). Use it,
+            not an empty `results`, to tell the two "no matches" cases apart:
+            - `catalogue_size` 0: nothing is published and embedded yet.
+            - `catalogue_size` > 0 with empty `results`: no showcase matched. The
+              current model has no relevance cut-off, so today this never happens.
+              It ranks the whole catalogue and always returns
+              min(`top_k`, `catalogue_size`) results, even when they are poor
+              fits. Handle it anyway, in case a cut-off is added later.
+        candidate_pool:
+          type: integer
+          description: Candidates scored (at most 50).
+        returned:
+          type: integer
+          description: Length of `results`.
+        score_scale:
+          type: string
+        ranking_is:
+          type: string
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            required: [loc, msg, type]
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string

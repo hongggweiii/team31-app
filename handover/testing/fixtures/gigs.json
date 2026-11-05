@@ -1,0 +1,256 @@
+[
+    {
+        "id": 9101,
+        "case": "typical gig, two categories picked out of order, skills unsorted",
+        "input": {
+            "title": "Interim finance lead for a regional group",
+            "summary": "Prepare transfer pricing documentation and support the year-end audit.",
+            "additional_notes": "Budget flexible.",
+            "tags": [
+                {
+                    "category": "Infocomm Technology",
+                    "specialisation": "Data and Artificial Intelligence",
+                    "skills": [
+                        "Data Analytics"
+                    ]
+                },
+                {
+                    "category": "Accountancy",
+                    "specialisation": "Tax",
+                    "skills": [
+                        "Transfer Pricing",
+                        "Tax Compliance"
+                    ]
+                },
+                {
+                    "category": "Accountancy",
+                    "specialisation": "Assurance",
+                    "skills": [
+                        "Financial Statements Analysis",
+                        "Auditing and Assurance Standards"
+                    ]
+                }
+            ]
+        },
+        "expected": {
+            "match_request": {
+                "hire_id": 9101,
+                "hire_title": "Interim finance lead for a regional group",
+                "hire_description": "Prepare transfer pricing documentation and support the year-end audit.",
+                "industry": null,
+                "taxonomy": [
+                    {
+                        "name": "Accountancy",
+                        "group": null,
+                        "specialisations": [
+                            {
+                                "name": "Assurance",
+                                "search_tag": "Assurance (Accountancy)",
+                                "skills": [
+                                    "Auditing and Assurance Standards",
+                                    "Financial Statements Analysis"
+                                ]
+                            },
+                            {
+                                "name": "Tax",
+                                "search_tag": "Tax (Accountancy)",
+                                "skills": [
+                                    "Tax Compliance",
+                                    "Transfer Pricing"
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Infocomm Technology",
+                        "group": null,
+                        "specialisations": [
+                            {
+                                "name": "Data and Artificial Intelligence",
+                                "search_tag": "Data and Artificial Intelligence (Infocomm Technology)",
+                                "skills": [
+                                    "Data Analytics"
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "top_k": 10
+            }
+        }
+    },
+    {
+        "id": 9102,
+        "case": "no tags at all",
+        "input": {
+            "title": "Help with our company accounts",
+            "summary": "Year-end accounts for a small firm.",
+            "additional_notes": null,
+            "tags": []
+        },
+        "expected": {
+            "match_request": {
+                "hire_id": 9102,
+                "hire_title": "Help with our company accounts",
+                "hire_description": "Year-end accounts for a small firm.",
+                "industry": null,
+                "taxonomy": [],
+                "top_k": 10
+            }
+        }
+    },
+    {
+        "id": 9103,
+        "case": "specialisation with no skills chosen",
+        "input": {
+            "title": "Management accountant",
+            "summary": "Monthly management packs.",
+            "additional_notes": null,
+            "tags": [
+                {
+                    "category": "Accountancy",
+                    "specialisation": "Management Accounting",
+                    "skills": []
+                }
+            ]
+        },
+        "expected": {
+            "match_request": {
+                "hire_id": 9103,
+                "hire_title": "Management accountant",
+                "hire_description": "Monthly management packs.",
+                "industry": null,
+                "taxonomy": [
+                    {
+                        "name": "Accountancy",
+                        "group": null,
+                        "specialisations": [
+                            {
+                                "name": "Management Accounting",
+                                "search_tag": "Management Accounting (Accountancy)",
+                                "skills": []
+                            }
+                        ]
+                    }
+                ],
+                "top_k": 10
+            }
+        }
+    },
+    {
+        "id": 9104,
+        "case": "title and summary with surrounding whitespace",
+        "input": {
+            "title": "  Data analytics lead \n",
+            "summary": "\n Build our first dashboards.\n\n",
+            "additional_notes": null,
+            "tags": [
+                {
+                    "category": "Infocomm Technology",
+                    "specialisation": "Data and Artificial Intelligence",
+                    "skills": [
+                        "Data Analytics",
+                        "Cloud Computing"
+                    ]
+                }
+            ]
+        },
+        "expected": {
+            "match_request": {
+                "hire_id": 9104,
+                "hire_title": "Data analytics lead",
+                "hire_description": "Build our first dashboards.",
+                "industry": null,
+                "taxonomy": [
+                    {
+                        "name": "Infocomm Technology",
+                        "group": null,
+                        "specialisations": [
+                            {
+                                "name": "Data and Artificial Intelligence",
+                                "search_tag": "Data and Artificial Intelligence (Infocomm Technology)",
+                                "skills": [
+                                    "Cloud Computing",
+                                    "Data Analytics"
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "top_k": 10
+            }
+        }
+    },
+    {
+        "id": 9105,
+        "case": "the same specialisation name under two categories; the maximum of 8 skills",
+        "input": {
+            "title": "Project manager for a shipyard upgrade",
+            "summary": "Run the construction programme for a shipyard extension.",
+            "additional_notes": null,
+            "tags": [
+                {
+                    "category": "Marine and Offshore",
+                    "specialisation": "Project Management",
+                    "skills": []
+                },
+                {
+                    "category": "Built Environment",
+                    "specialisation": "Project Management",
+                    "skills": [
+                        "Dispute Resolution",
+                        "Asset Management",
+                        "Design for Safety",
+                        "Critical Thinking",
+                        "Construction Technology",
+                        "Business Development",
+                        "Data Collection and Analysis",
+                        "Continuous Improvement Management"
+                    ]
+                }
+            ]
+        },
+        "expected": {
+            "match_request": {
+                "hire_id": 9105,
+                "hire_title": "Project manager for a shipyard upgrade",
+                "hire_description": "Run the construction programme for a shipyard extension.",
+                "industry": null,
+                "taxonomy": [
+                    {
+                        "name": "Built Environment",
+                        "group": null,
+                        "specialisations": [
+                            {
+                                "name": "Project Management",
+                                "search_tag": "Project Management (Built Environment)",
+                                "skills": [
+                                    "Asset Management",
+                                    "Business Development",
+                                    "Construction Technology",
+                                    "Continuous Improvement Management",
+                                    "Critical Thinking",
+                                    "Data Collection and Analysis",
+                                    "Design for Safety",
+                                    "Dispute Resolution"
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Marine and Offshore",
+                        "group": null,
+                        "specialisations": [
+                            {
+                                "name": "Project Management",
+                                "search_tag": "Project Management (Marine and Offshore)",
+                                "skills": []
+                            }
+                        ]
+                    }
+                ],
+                "top_k": 10
+            }
+        }
+    }
+]

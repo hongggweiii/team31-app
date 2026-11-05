@@ -1,0 +1,190 @@
+[
+    {
+        "id": 9001,
+        "case": "typical profile with rich text",
+        "input": {
+            "headline": "Fractional CFO for growth-stage startups",
+            "years_experience": 15,
+            "about": "<p>I help <strong>Series A-B</strong> companies build their finance function.</p><p>From monthly close to board reporting.</p>",
+            "services": [
+                {
+                    "title": "Financial planning and analysis",
+                    "description": "<p>Three-statement models and budgets.</p>"
+                },
+                {
+                    "title": "Fundraising support",
+                    "description": "<p>Investor data rooms and due diligence.</p>"
+                }
+            ],
+            "achievements": [
+                "<p>Led finance through a S$40m Series B.</p>",
+                "<p>Set up FP&amp;A at two SaaS firms.</p>"
+            ]
+        },
+        "expected": {
+            "fields_json": {
+                "about_title": "Fractional CFO for growth-stage startups",
+                "about_description": "I help Series A-B companies build their finance function.\nFrom monthly close to board reporting.",
+                "services_offered_title": "Financial planning and analysis; Fundraising support",
+                "services_offered_description": "Three-statement models and budgets.\nInvestor data rooms and due diligence.",
+                "relevant_experience": "Led finance through a S$40m Series B. Set up FP&A at two SaaS firms.",
+                "years_experience": 15
+            },
+            "provider_text": "Fractional CFO for growth-stage startups I help Series A-B companies build their finance function.\nFrom monthly close to board reporting. Financial planning and analysis; Fundraising support Three-statement models and budgets.\nInvestor data rooms and due diligence. Led finance through a S$40m Series B. Set up FP&A at two SaaS firms.",
+            "text_hash": "5c4057bd595600be91ea4782f616db660287a839a15acbf8499c4ac1201bc356"
+        }
+    },
+    {
+        "id": 9002,
+        "case": "lists, line breaks, HTML entities and non-breaking spaces",
+        "input": {
+            "headline": "Internal audit & risk advisor",
+            "years_experience": 12,
+            "about": "<p>Former Big Four audit manager.<br>Now independent.</p><ol><li>Internal controls</li><li>Risk frameworks</li><li></li></ol><p>Clients&nbsp;include SGX&#39;s listed groups.</p>",
+            "services": [
+                {
+                    "title": "Internal audit",
+                    "description": "<ul><li>Control testing</li><li>Fraud&nbsp;risk</li></ul>"
+                }
+            ],
+            "achievements": [
+                "<p>Ran internal audit</p><p>across five countries.</p>"
+            ]
+        },
+        "expected": {
+            "fields_json": {
+                "about_title": "Internal audit & risk advisor",
+                "about_description": "Former Big Four audit manager.\nNow independent.\n- Internal controls\n- Risk frameworks\nClients include SGX's listed groups.",
+                "services_offered_title": "Internal audit",
+                "services_offered_description": "- Control testing\n- Fraud risk",
+                "relevant_experience": "Ran internal audit across five countries.",
+                "years_experience": 12
+            },
+            "provider_text": "Internal audit & risk advisor Former Big Four audit manager.\nNow independent.\n- Internal controls\n- Risk frameworks\nClients include SGX's listed groups. Internal audit - Control testing\n- Fraud risk Ran internal audit across five countries.",
+            "text_hash": "1dfa2725b6c250d5d6f67f891638dacc7290ec83aed5f27a4667272d1421efc6"
+        }
+    },
+    {
+        "id": 9003,
+        "case": "headline only: no bio, services or achievements",
+        "input": {
+            "headline": "Cloud security architect",
+            "years_experience": null,
+            "about": null,
+            "services": [],
+            "achievements": []
+        },
+        "expected": {
+            "fields_json": {
+                "about_title": "Cloud security architect",
+                "about_description": "",
+                "services_offered_title": "",
+                "services_offered_description": "",
+                "relevant_experience": "",
+                "years_experience": null
+            },
+            "provider_text": "Cloud security architect",
+            "text_hash": "46c5ac49001e4117b2c5f4b733eb7461fb8e4f2323f20f6ca3d085d599677ed7"
+        }
+    },
+    {
+        "id": 9004,
+        "case": "services with an empty title or no description; empty achievement",
+        "input": {
+            "headline": "M&A advisor",
+            "years_experience": 20,
+            "about": "<p>Buy-side and sell-side deals in Southeast Asia.</p>",
+            "services": [
+                {
+                    "title": "Transaction due diligence",
+                    "description": null
+                },
+                {
+                    "title": "   ",
+                    "description": "<p>Valuation models.</p>"
+                },
+                {
+                    "title": "Post-deal integration",
+                    "description": "<p></p>"
+                }
+            ],
+            "achievements": [
+                "<p>Closed 30 deals.</p>",
+                "<p>   </p>",
+                "Advised on a US$2bn merger."
+            ]
+        },
+        "expected": {
+            "fields_json": {
+                "about_title": "M&A advisor",
+                "about_description": "Buy-side and sell-side deals in Southeast Asia.",
+                "services_offered_title": "Transaction due diligence; Post-deal integration",
+                "services_offered_description": "Valuation models.",
+                "relevant_experience": "Closed 30 deals. Advised on a US$2bn merger.",
+                "years_experience": 20
+            },
+            "provider_text": "M&A advisor Buy-side and sell-side deals in Southeast Asia. Transaction due diligence; Post-deal integration Valuation models. Closed 30 deals. Advised on a US$2bn merger.",
+            "text_hash": "2d98f8a5283ce58adbc5a00097151b965aff140d1b21968def656f4a1ac1ec83"
+        }
+    },
+    {
+        "id": 9005,
+        "case": "non-English text, emoji and smart quotes",
+        "input": {
+            "headline": "会计师 · Akauntan bertauliah 📊",
+            "years_experience": 8,
+            "about": "<p>Saya membantu PKS dengan “cukai” dan audit — 中小企业财务。</p>",
+            "services": [
+                {
+                    "title": "Cukai korporat",
+                    "description": "<p>GST &amp; cukai pendapatan.</p>"
+                }
+            ],
+            "achievements": [
+                "<p>Menjimatkan 20% kos cukai untuk 50 pelanggan.</p>"
+            ]
+        },
+        "expected": {
+            "fields_json": {
+                "about_title": "会计师 · Akauntan bertauliah 📊",
+                "about_description": "Saya membantu PKS dengan “cukai” dan audit — 中小企业财务。",
+                "services_offered_title": "Cukai korporat",
+                "services_offered_description": "GST & cukai pendapatan.",
+                "relevant_experience": "Menjimatkan 20% kos cukai untuk 50 pelanggan.",
+                "years_experience": 8
+            },
+            "provider_text": "会计师 · Akauntan bertauliah 📊 Saya membantu PKS dengan “cukai” dan audit — 中小企业财务。 Cukai korporat GST & cukai pendapatan. Menjimatkan 20% kos cukai untuk 50 pelanggan.",
+            "text_hash": "5e98af0dbac6d437df0b8920b91fe4b68bb3b1b0292262006c8a14c73f8da739"
+        }
+    },
+    {
+        "id": 9006,
+        "case": "surrounding whitespace and blank lines everywhere",
+        "input": {
+            "headline": "   Marketing strategist \n",
+            "years_experience": 5,
+            "about": "<p>   I build brand plans.   </p><p></p><p>\n\nFor consumer startups.</p>",
+            "services": [
+                {
+                    "title": "  Growth marketing\t",
+                    "description": "<p>  Paid and organic.  </p>"
+                }
+            ],
+            "achievements": [
+                "<p>Grew a D2C brand\nfrom zero to 100k customers.</p>"
+            ]
+        },
+        "expected": {
+            "fields_json": {
+                "about_title": "Marketing strategist",
+                "about_description": "I build brand plans.\nFor consumer startups.",
+                "services_offered_title": "Growth marketing",
+                "services_offered_description": "Paid and organic.",
+                "relevant_experience": "Grew a D2C brand from zero to 100k customers.",
+                "years_experience": 5
+            },
+            "provider_text": "Marketing strategist I build brand plans.\nFor consumer startups. Growth marketing Paid and organic. Grew a D2C brand from zero to 100k customers.",
+            "text_hash": "d0225184e3ac340f70503b04cc393fa04278af1d5b5b315baaeec2d42f14dff9"
+        }
+    }
+]
