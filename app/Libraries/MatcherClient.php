@@ -3,8 +3,8 @@
 namespace App\Libraries;
 
 use CodeIgniter\HTTP\CURLRequest;
+use CodeIgniter\HTTP\Exceptions\HTTPException;
 use Config\Matcher;
-use RuntimeException;
 
 /**
  * Asks matcher/ for the showcases that best match a gig, in the ranker's API
@@ -54,29 +54,55 @@ class MatcherClient
     /**
      * @param array<string, mixed> $request gigRequest()
      *
-     * @return array<string, mixed> The decoded response
+     * @return array<string, mixed> The decoded response; results that lack the fields the page shows are dropped
      *
-     * @throws RuntimeException When matcher/ is unreachable, times out, or answers with an error
-     *                          (the exception code is the HTTP status)
+     * @throws MatcherException Why matching failed: unreachable, timed out, refused, or an unusable answer
+     *                          (the exception code is the HTTP status, 0 when matcher/ never answered)
      */
     public function match(array $request): array
     {
-        $response = RequestTimer::span('matcher', fn () => $this->client->post('match', [
-            'json'        => $request,
-            'http_errors' => false,
-        ]));
+        // matcher/ answers 422 for this anyway; no need to spend a round trip on it.
+        if (trim($request['hire_title'] ?? '') === '' && trim($request['hire_description'] ?? '') === '') {
+            throw new MatcherException(MatcherException::REJECTED, 'The gig has no title or description to match');
+        }
+
+        try {
+            $response = RequestTimer::span('matcher', fn () => $this->client->post('match', [
+                'json'        => $request,
+                'http_errors' => false,
+            ]));
+        } catch (HTTPException $e) { // connection refused, DNS, timeout
+            throw new MatcherException(MatcherException::UNAVAILABLE, 'Matcher unreachable: ' . $e->getMessage());
+        }
 
         $status = $response->getStatusCode();
         $body   = (string) $response->getBody();
         $data   = json_decode($body, true);
 
         if ($status !== 200) {
-            throw new RuntimeException("Matcher returned HTTP {$status}: {$body}", $status);
+            $reason = in_array($status, [400, 422], true) ? MatcherException::REJECTED : MatcherException::UNAVAILABLE;
+
+            throw new MatcherException($reason, "Matcher returned HTTP {$status}: {$body}", $status);
         }
         if (! is_array($data) || ! is_array($data['results'] ?? null)) {
-            throw new RuntimeException('Matcher returned no results: ' . $body);
+            throw new MatcherException(MatcherException::BAD_RESPONSE, 'Matcher returned no results: ' . $body, $status);
         }
 
+        $data['results'] = array_values(array_filter($data['results'], self::usable(...)));
+
         return $data;
+    }
+
+    /**
+     * A result the matches page can show: the ranker's contract guarantees these,
+     * so anything else is skipped rather than allowed to break the page.
+     */
+    private static function usable(mixed $result): bool
+    {
+        return is_array($result)
+            && is_int($result['rank'] ?? null)
+            && is_int($result['provider_id'] ?? null)
+            && is_numeric($result['score'] ?? null)
+            && is_array($result['provider'] ?? null);
     }
 }

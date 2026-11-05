@@ -37,12 +37,13 @@ import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 import numpy as np
 import pymysql
 import xgboost as xgb
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 HERE = Path(__file__).resolve().parent
 PIPELINE = HERE / "pipeline"
@@ -117,7 +118,9 @@ class Catalogue:
         self.vectors = np.asarray(unit_vectors, dtype=np.float16)
         self.bm25 = BM25Retriever(providers, refined=True) if providers else None
         # skill_soft compares skill-name vectors; without them the feature is 0.
-        self.tags = TagMatcher([], providers, skill_vectors)
+        # TagMatcher takes log(len(providers)), so an empty catalogue (nothing
+        # published or embedded yet) gets none: candidates() returns [] first.
+        self.tags = TagMatcher([], providers, skill_vectors) if providers else None
 
 
 def dense_rank(cat: Catalogue, gig_unit: np.ndarray) -> list[tuple[int, float]]:
@@ -211,8 +214,10 @@ def response(ranked: list[dict], cat: Catalogue, top_k: int) -> dict:
                 "taxonomy": {f: round(float(x[f]), 4) for f in TAG_FEATURES},
             },
         })
-    return {"results": results, "meta": {**META, "candidate_pool": len(ranked), "returned": len(results),
-                                         "score_scale": SCORE_SCALE, "ranking_is": RANKING_IS}}
+    # catalogue_size tells "nothing published yet" (0) apart from "nothing matched" (an
+    # empty list from a non-empty catalogue), so callers never infer it from `results`.
+    return {"results": results, "meta": {**META, "catalogue_size": len(cat.providers), "candidate_pool": len(ranked),
+                                         "returned": len(results), "score_scale": SCORE_SCALE, "ranking_is": RANKING_IS}}
 
 
 # ---- embedding-service: the gig (query side), and skill names -----------------
@@ -415,14 +420,37 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="SenseiGigs matcher", lifespan=lifespan)
 
 
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class TaxonomySpecialisation(BaseModel):
+    name: Name
+    search_tag: str | None = None  # "<specialisation> (<category>)"; display only
+    skills: list[Name] = Field(default_factory=list)
+
+
+class TaxonomyCategory(BaseModel):
+    name: Name
+    group: str | None = None
+    specialisations: list[TaxonomySpecialisation] = Field(default_factory=list)
+
+
 class MatchRequest(BaseModel):
-    """The ranker's request (API_IO_SPEC.md): field names as in its hirers.json."""
+    """The ranker's request (API_IO_SPEC.md): field names as in its hirers.json.
+    Malformed input is a 422 here, never a crash (500) or an embedding-service
+    rejection reported as a 503 further in."""
     hire_id: int
     hire_title: str
     hire_description: str
     industry: str | None = None
-    taxonomy: list[dict] = Field(default_factory=list)  # [{name, group, specialisations: [{name, search_tag, skills}]}]
+    taxonomy: list[TaxonomyCategory] = Field(default_factory=list)
     top_k: int = Field(10, ge=1, le=POOL_SIZE)
+
+    @model_validator(mode="after")
+    def has_text(self):
+        if not (self.hire_title.strip() or self.hire_description.strip()):
+            raise ValueError("hire_title and hire_description are both empty: there is no text to match")
+        return self
 
 
 @app.get("/health")
@@ -437,8 +465,10 @@ async def health():
 async def match(req: MatchRequest, background: BackgroundTasks):
     t0 = time.perf_counter()
     cat = state["catalogue"]
+    if not cat.providers:  # nothing published and embedded yet: no candidates, so no need to embed the gig
+        return response([], cat, req.top_k)
     gig = {"hire_id": req.hire_id, "hire_title": req.hire_title, "hire_description": req.hire_description,
-           "industry": req.industry, "tags": {"categories": req.taxonomy}}
+           "industry": req.industry, "tags": {"categories": [c.model_dump() for c in req.taxonomy]}}
     vector, model_name = embed_gig(gig)
     t1 = time.perf_counter()
     rows = candidates(cat, gig, vector)
