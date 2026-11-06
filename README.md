@@ -206,11 +206,11 @@ Both forms tag a gig / showcase as the Data team's records do: up to 2 **categor
 
 ## Taxonomy governance (`taxonomy-service/`)
 
-AI suggests SkillsFuture tags for a gig or showcase (Technical Brief §10-11). A term the taxonomy doesn't have is shown to the user straight away but is never added to it: it is stored in `taxonomy_proposals` as `pending_review`, with its source, the model's confidence and the gig / showcase it was suggested for, until it is approved or rejected on the taxonomy dashboard. Duplicates and synonyms among pending terms are flagged first.
+AI suggests SkillsFuture tags for a gig or showcase. A term the taxonomy doesn't have is shown to the user straight away but is never added to it: it is stored in `taxonomy_proposals` as `pending_review`, with its source, the model's confidence and the gig / showcase it was suggested for, until it is approved or rejected on the taxonomy dashboard. Duplicates and synonyms among pending terms are flagged first.
 
 ```
 POST /suggest     gig / showcase text -> one OpenAI call (gpt-4o-mini, structured output) with the whole taxonomy in the prompt
-                  -> each name looked up: exact, else Levenshtein >= 85% (POST /lookup; brief §9.2, §10.3)
+                  -> each name looked up: exact, else Levenshtein >= 85% (POST /lookup)
                   -> found: "tags", in Taxonomy::tags()'s shape plus ids     not found: "pending", stored as pending_review
 after the response, each new pending term is screened against the taxonomy and every other pending term:
                   exact (same name, ignoring case / spacing / trailing punctuation), fuzzy (Levenshtein >= 85%),
@@ -240,7 +240,7 @@ The **taxonomy dashboard** (`/taxonomy-dashboard`, for any logged-in user) is th
 - *Proposals*: the pending queue, with each term's duplicate check (flag, closest match, similarity) and the other rows holding the same term. Approve or reject one row or the ticked rows; a rejection reason goes to the users notified.
 - *Taxonomy*: browse and search the SkillsFuture tree with how many gigs and showcases use each item; add, rename, or remove what nothing uses (removing an item in use would untag gigs and showcases through the FK cascades). After each edit the service re-checks pending terms.
 
-Check the service without touching the database (a throwaway SQLite copy, OpenAI faked; covers the brief's §14 cases):
+Check the service without touching the database (a throwaway SQLite copy, OpenAI faked; covers the brief's test cases):
 
 ```bash
 cd taxonomy-service && .venv/bin/python check_service.py
