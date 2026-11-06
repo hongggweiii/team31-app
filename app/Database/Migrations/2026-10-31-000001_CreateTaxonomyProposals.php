@@ -5,7 +5,7 @@ namespace App\Database\Migrations;
 use CodeIgniter\Database\Migration;
 
 /**
- * Taxonomy governance, written by taxonomy-service/ (Technical Brief §7.5, §11):
+ * Taxonomy governance, written by taxonomy-service/:
  *
  *   taxonomy_proposals  terms the taxonomy doesn't have yet, from AI tag
  *                       suggestion or typed by a user, held as pending_review

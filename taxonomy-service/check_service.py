@@ -148,7 +148,7 @@ def run_faked() -> None:
     pending = lambda: client.get("/proposals").json()["proposals"]  # noqa: E731
     by_name = lambda name: next(p for p in pending() if p["proposed_name"] == name)  # noqa: E731
 
-    print("Lookup (brief §10.3, §14.1)")
+    print("Lookup")
     r = client.post("/lookup", json={"name": "regulatory reporting", "kind": "skill"}).json()
     check("case-insensitive exact match", r["found"] and r["match_type"] == "exact" and r["name"] == "Regulatory Reporting", r)
     r = client.post("/lookup", json={"name": "Regulatry Reporting", "kind": "skill"}).json()
@@ -158,7 +158,7 @@ def run_faked() -> None:
     r = client.post("/lookup", json={"name": "Data Analytics", "kind": "skill", "parent_id": spec["Assurance"]}).json()
     check("a skill is looked up among its specialisation's skills", r["found"] is False, r)
 
-    print("Suggest (deliverable a, brief §14.2)")
+    print("Suggest (deliverable a)")
     ai.answer = {
         "tags": [{"category": "Financial Services", "specialisation": "Regulatory Compliance", "confidence": 0.92,
                   "skills": ["AML/KYC Program Design", "Regulatry Reporting", "Transaction Monitoring"]},
@@ -200,7 +200,7 @@ def run_faked() -> None:
     check("OpenAI timeout -> 503, so the app shows the manual picker", r.status_code == 503, r.text)
     ai.error = None
 
-    print("User-typed terms and duplicate / synonym flags (deliverable c, brief §14.3)")
+    print("User-typed terms and duplicate / synonym flags (deliverable c)")
     r = client.post("/proposals", json={"name": "audit compliance", "kind": "skill", "specialisation_id": spec["Assurance"],
                                         "source": "provider", "user_id": 20, "owner_type": "showcase", "owner_id": 1}).json()
     check("an existing term is returned, not proposed", r["found"] and r["match"]["name"] == "Audit Compliance", r)
