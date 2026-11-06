@@ -7,7 +7,7 @@ POST /match: one gig in, ranked showcases out, in the ranker's API contract
 
 Inside the request (the 5 s budget) the gig is embedded LIVE by embedding-service/
 (the ranker's query recipe; check_parity.py confirms bit-identical vectors), then
-ranked by the ranker's own pipeline (pipeline/, verbatim copies at RANKER_VERSION)
+ranked by the ranker's own pipeline (pipeline/; each file's header names its ranker file)
 over the whole showcase catalogue, as the ranker's serve.py does:
 
     refined BM25 || cosine (1024-d) -> RRF k=60 -> top-50 -> 17 features, z-scored per query
@@ -59,6 +59,7 @@ from tag_features import TAG_FEATURES, TagMatcher, embed_skills, tag_axes  # noq
 
 MODEL_PATH = PIPELINE / "models_data" / "data_set_v5_tax" / "v5tax_tags_xgb.json"
 FEATURES = list(DEFAULT_FEATURES) + list(TAG_FEATURES)  # 17, positional: the model stores no names
+# POOL_SIZE and DENSE_DIM: serve.py reads them from the ranker's configs/lightweight.json
 POOL_SIZE = 50         # features.py --top-k: the candidate pool the ranker was trained on
 DENSE_DIM = 1024       # features.py --dense-dim default
 REFRESH_SECONDS = 30   # how often the background thread checks MariaDB for changed showcases
@@ -102,6 +103,7 @@ RANKER = os.environ.get("MATCHER_CORPUS")  # unset: the app's showcases in Maria
 
 
 # ---- matching: the ranker's per-gig steps over an in-memory catalogue ---------
+# serve.py's serve(), split into steps; each calls the pipeline/ functions serve.py calls.
 
 class Catalogue:
     """What the ranker builds once before scoring any gig (features.py, serve.py):
@@ -112,6 +114,9 @@ class Catalogue:
     output, exactly. They are kept in float16, the precision the ranker scores in."""
 
     def __init__(self, providers: list[dict], unit_vectors: np.ndarray, skill_vectors: dict | None = None):
+        """Prepares everything needed to match gigs against these showcases: their ids, their
+        vectors, a keyword search index (BM25) and the tag matcher. This happens once per
+        catalogue, so a match request only has to work on the new gig."""
         self.providers = providers
         self.ids = [p["provider_id"] for p in providers]
         self.by_id = {p["provider_id"]: p for p in providers}
@@ -132,8 +137,18 @@ def dense_rank(cat: Catalogue, gig_unit: np.ndarray) -> list[tuple[int, float]]:
 
 
 def candidates(cat: Catalogue, gig: dict, gig_unit: np.ndarray) -> list[dict]:
-    """features.py's per-gig loop body plus tag_features.py: the RRF top-50 over
-    the whole catalogue, each with the ranker's raw feature row."""
+    """Finds the 50 showcases most likely to fit the gig, and works out the ranker's features for
+    each.
+
+    Two searches rank every showcase: BM25 (how many words they share) and cosine similarity
+    of their vectors (how close they are in meaning). RRF (reciprocal rank fusion) merges the
+    two rankings into one, and the top 50 are kept. Each gets a row of features: its scores
+    and places in both searches, the features that are always 0 (DEAD_FEATURES), and the 8 tag
+    features comparing the gig's tags with the showcase's.
+
+    This is the per-gig step of the ranker's features.py and tag_features.py, with values
+    rounded as features.py rounds them. The ranker's serve.py rebuilds the tag matcher for
+    every gig; this reuses the catalogue's one, which gives the same results."""
     if not cat.providers:
         return []
     h = gig
@@ -156,14 +171,14 @@ def candidates(cat: Catalogue, gig: dict, gig_unit: np.ndarray) -> list[dict]:
         rows.append({
             "hire_id": 0,  # normalize_by_query groups rows by it
             "provider_id": pid,
-            # ---- features.py:244-269, as-is, except the dead features (see DEAD_FEATURES) ----
+            # ---- features.py:247-272, as-is, except the dead features (see DEAD_FEATURES) ----
             "bm25_score": round(float(bm25_score.get(pid, 0.0)), 6),
             "bm25_rank": bm25_pos.get(pid, 0),
             "dense_cosine": round(float(dense_score.get(pid, 0.0)), 6),
             "dense_rank": dense_pos.get(pid, 0),
             "rrf_score": round(float(rrf_score), 8),
             "rrf_rank": rrf_pos,
-            "exp_years": round(float(p_tax.get("years_experience") or 0), 1),
+            "exp_years": round(float(p_tax.get("years_experience") or 0), 1),  # not one of FEATURES: unused by the model
             **dict.fromkeys(DEAD_FEATURES, 0.0),
             # ---- tag_features.py (tag_features.csv is rounded to 6 places) ----
             **{k: round(v, 6) for k, v in cat.tags.features(GIG_KEY, pid).items()},
@@ -172,9 +187,13 @@ def candidates(cat: Catalogue, gig: dict, gig_unit: np.ndarray) -> list[dict]:
 
 
 def score(rows: list[dict]) -> list[dict]:
-    """The shipped ranker over one gig's candidates, best first (serve.py /
-    api_io_example.py): z-score SCORE_FEATURES within the query, predict the
-    margin, min-max it to 0-100."""
+    """Has the ranker model put the candidates in order, best first.
+
+    First, each score feature is standardised within this gig (a z-score: how far above or
+    below this gig's average it is), because the model was trained that way. Then the model
+    gives each candidate a raw score (its margin). The margins are rescaled to 0-100 for
+    display: 100 for the best candidate and 0 for the worst. These are the same steps as the
+    ranker's serve.py."""
     if not rows:
         return []
     inputs = [dict(r) for r in rows]
@@ -189,12 +208,17 @@ def score(rows: list[dict]) -> list[dict]:
 
 
 def rank(cat: Catalogue, gig: dict, gig_unit: np.ndarray) -> list[dict]:
+    """Ranks the showcases for one gig, best first, by calling candidates() and then score().
+    These are the same steps as the ranker's serve.py. check_parity.py uses this function;
+    /match calls the two steps separately so it can time each one."""
     return score(candidates(cat, gig, gig_unit))
 
 
 def response(ranked: list[dict], cat: Catalogue, top_k: int) -> dict:
-    """The ranker's response block (example_io.json): signals are the model's
-    actual inputs, after z-scoring, in declared order."""
+    """Builds the reply in the ranker's format (its example_io.json): the top_k showcases, each
+    with its rank, score, a short profile and the feature values the model saw, plus a `meta`
+    block describing the pipeline. The ranker's newer serve.py also adds the gig's hire_id and
+    tier details; this reply keeps example_io.json's format, which the PHP app reads."""
     results = []
     for rank_, c in enumerate(ranked[:top_k], start=1):
         p, x = cat.by_id[c["provider_id"]], c["inputs"]
@@ -221,8 +245,14 @@ def response(ranked: list[dict], cat: Catalogue, top_k: int) -> dict:
 
 
 # ---- embedding-service: the gig (query side), and skill names -----------------
+# serve.py embeds in-process (retrieval_dense.encode_queries, tag_features.embed_skills).
+# Here embedding-service does, with the same model and text recipe; check_parity.py
+# check 1 shows its vectors are bit-identical to the ranker's.
 
 def post_json(path: str, body: dict, timeout: float) -> dict:
+    """Sends a JSON request to the embedding service and returns its JSON reply. If the service
+    can't be reached, takes too long, returns an error or sends back something unreadable, the
+    caller gets HTTP 503 (service unavailable)."""
     req = urllib.request.Request(EMBEDDING_URL + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -246,12 +276,17 @@ def embed_skill_names(names: list[str]) -> dict:
 
 
 # ---- MariaDB: the showcase catalogue (read) and gig vectors (written after the response)
+# The ranker reads its corpus from providers.json and stores nothing. Here the
+# showcases, their vectors and tags are read from the PHP app's database (its .env).
 
 _conn = None
 _db_lock = threading.Lock()  # one connection, shared by requests, the refresh thread and saves
 
 
 def db_query(sql: str, args=None) -> list[dict]:
+    """Runs one SQL query on the app's MariaDB database and returns the rows, each as a dict. The
+    connection is opened the first time it is needed, with the database settings from the
+    app's .env file, and reopened if it has dropped."""
     global _conn
     with _db_lock:
         if _conn is None:
@@ -288,8 +323,13 @@ def load_tags(owner: str) -> dict[int, dict]:
 
 
 def load_catalogue() -> Catalogue:
-    """Every published showcase that has been embedded: the ranker-format record it
-    was embedded from (fields_json), its tags, and its stored vector."""
+    """Loads every published showcase that has a vector from MariaDB: the text it was embedded
+    from (fields_json), its tags and its vector.
+
+    This replaces the ranker reading providers.json. fields_json uses the ranker's field names
+    (the PHP app writes it in ProviderEmbedder::showcaseFields), so the ranker's code can read
+    it unchanged. It holds only the text fields and years_experience, with no industry, so
+    each result's provider.industry is null."""
     rows = db_query("SELECT e.showcase_id AS id, e.fields_json, VEC_ToText(e.embedding) AS embedding "
                     "FROM showcase_embeddings e JOIN showcases s ON s.id = e.showcase_id "
                     "WHERE s.status = 'published' AND e.fields_json IS NOT NULL ORDER BY e.showcase_id")
@@ -363,6 +403,8 @@ def refresh_forever() -> None:
 
 
 # ---- the ranker's own corpus (MATCHER_CORPUS), to replay example_io.json -------
+# load_ranker_corpus is serve.py's _load() plus its _tag_matcher's skill list.
+# build_skill_vectors is used in both modes.
 
 def build_skill_vectors(skills: list, cache: Path) -> dict:
     """tag_features.embed_skills, cached. Built in a child process: it runs torch on
@@ -381,6 +423,10 @@ def build_skill_vectors(skills: list, cache: Path) -> dict:
 
 
 def load_ranker_corpus(ranker: Path) -> Catalogue:
+    """Loads the ranker's own test data (its 3,024 providers) instead of the app's showcases.
+    This is only used when MATCHER_CORPUS is set, to check that the matcher gives the same
+    results as the ranker. The provider vectors are read from cache/ if check_parity.py saved
+    them there; otherwise they are requested from the embedding service and saved in cache/."""
     data = ranker / "pipeline" / "data" / "data_set_v5_tax"
     providers = json.loads((data / "providers.json").read_text(encoding="utf-8"))
     hirers = json.loads((data / "hirers.json").read_text(encoding="utf-8"))
@@ -404,9 +450,14 @@ def load_ranker_corpus(ranker: Path) -> Catalogue:
 
 
 # ---- HTTP -----------------------------------------------------------------------
+# The ranker's serve.py takes one gig per run (--hire-id / --gig-json); this service keeps running.
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """Runs once when the matcher starts, before it accepts requests. It loads the showcases to
+    match against: from MariaDB, or the ranker's data when MATCHER_CORPUS is set. For MariaDB
+    it also starts the background thread that reloads them when they change. Finally it sends
+    the embedding service a first request so it is ready."""
     if RANKER:
         state["catalogue"] = load_ranker_corpus(Path(RANKER))
     else:
@@ -424,12 +475,15 @@ Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class TaxonomySpecialisation(BaseModel):
+    """A specialisation the gig is tagged with, and the skills picked under it."""
     name: Name
     search_tag: str | None = None  # "<specialisation> (<category>)"; display only
     skills: list[Name] = Field(default_factory=list)
 
 
 class TaxonomyCategory(BaseModel):
+    """A category the gig is tagged with, and its specialisations. The request's `taxonomy` is a
+    list of these, in the same format as the tags in the ranker's data."""
     name: Name
     group: str | None = None
     specialisations: list[TaxonomySpecialisation] = Field(default_factory=list)
@@ -448,6 +502,8 @@ class MatchRequest(BaseModel):
 
     @model_validator(mode="after")
     def has_text(self):
+        """Rejects the request (HTTP 422) if the gig has neither a title nor a description,
+        because there would be no text to match on."""
         if not (self.hire_title.strip() or self.hire_description.strip()):
             raise ValueError("hire_title and hire_description are both empty: there is no text to match")
         return self
@@ -455,6 +511,8 @@ class MatchRequest(BaseModel):
 
 @app.get("/health")
 async def health():
+    """Reports that the matcher is running, which showcases it matches against and how many, and
+    which ranker model and version it uses."""
     return {"status": "ok", "corpus": RANKER or "mariadb", "providers": len(state["catalogue"].providers),
             "ranker": MODEL_PATH.name, "ranker_version": (HERE / "RANKER_VERSION").read_text().strip()}
 
@@ -463,6 +521,13 @@ async def health():
 # xgboost are never used concurrently.
 @app.post("/match")
 async def match(req: MatchRequest, background: BackgroundTasks):
+    """Matches one gig against all published showcases and returns the best ones.
+
+    Steps: turn the gig's text into a vector (through the embedding service); find the 50
+    showcases most likely to fit, by keywords and by meaning; work out the 17 numbers
+    (features) the ranker model looks at for each; let the model put them in order. The gig's
+    vector is saved to the database only after the reply has been sent, so saving never slows
+    the reply down. If no showcases are published yet, it returns an empty list straight away."""
     t0 = time.perf_counter()
     cat = state["catalogue"]
     if not cat.providers:  # nothing published and embedded yet: no candidates, so no need to embed the gig

@@ -1,12 +1,12 @@
 """
 AI tag suggestion for gigs and showcases, and the governance of terms the
-taxonomy doesn't have yet (Technical Brief §10-11), on the app's SkillsFuture
+taxonomy doesn't have yet, on the app's SkillsFuture
 taxonomy (sf_* tables: category -> specialisation -> skills).
 
     GET  /health
     POST /suggest                  gig / showcase text -> the taxonomy's tags that fit it ("tags"), and the terms
                                    it lacks, stored as pending_review proposals and returned at once ("pending")
-    POST /lookup                   is this name in the taxonomy? (brief §10.3: exact, else Levenshtein fuzzy)
+    POST /lookup                   is this name in the taxonomy? (exact match, else a close spelling match)
     POST /proposals                a term a user typed: its existing match, or a new pending proposal
     POST /proposals/attach         binds proposals suggested before their gig / showcase was saved
     GET  /proposals                the review queue, with duplicate / synonym flags
@@ -19,6 +19,15 @@ taxonomy_proposals row holds it, with its source, confidence and gig / showcase,
 until it is approved, so matcher/ only ever sees approved terms. Pending rows
 holding the same term (same kind, parent and normalised name) are one decision:
 approving or rejecting one applies to all of them.
+
+What the ranker share is the SkillsFuture taxonomy (sf_v1), the list of categories, 
+specialisations and skills. The ranker's data is tagged with it, and 
+`php spark taxonomy:import` copies it from that data into the app's sf_* tables, 
+which this service reads. The ranker's data came already tagged, so the ranker has 
+no tagging or review step; this service adds both for the app (OpenAI suggestions, 
+then a person reviews any new term). The tags it helps put on gigs and showcases 
+are what matcher/ uses for the ranker's tag features. Settings and the database 
+connection work as in matcher/app.py.
 
 Run (from taxonomy-service/; the database, OPENAI_API_KEY and taxonomy.* settings
 come from the app's ../.env):
@@ -59,11 +68,11 @@ def env(key: str, default: str | None = None) -> str | None:
     return default
 
 
-# Brief §16: nothing here is hardcoded that the client may want to change.
-MODEL = env("taxonomy.openaiModel", "gpt-4o-mini")            # brief §10.6
+
+MODEL = env("taxonomy.openaiModel", "gpt-4o-mini")            
 OPENAI_TIMEOUT = float(env("taxonomy.openaiTimeout", "20"))    # seconds; on failure the app shows the manual picker
 CACHE_SECONDS = int(env("taxonomy.cacheSeconds", "86400"))     # how long the in-memory taxonomy is kept
-FUZZY_PCT = int(env("taxonomy.fuzzySimilarityPct", "85"))      # the brief's matching_config.fuzzy_similarity_pct
+FUZZY_PCT = int(env("taxonomy.fuzzySimilarityPct", "85"))      # how alike (0-100) two names must be to count as a close match
 SERVICE_TOKEN = env("taxonomy.serviceToken", "")              # when set, callers must send it as X-Service-Token
 PROMPTS = {p.stem: p.read_text() for p in (HERE / "prompts").glob("*.txt")}
 
@@ -74,6 +83,7 @@ NO_MATCH = ("none", None, None, None, None)  # auto_flag, closest_match_table / 
 
 
 def now() -> str:
+    """The current time in UTC, as text in the format the database stores dates in."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")  # the app's appTimezone is UTC
 
 
@@ -87,11 +97,15 @@ class Db:
     IDLE_PING_SECONDS = 30  # a remote round trip each: only check a connection that has sat idle
 
     def __init__(self):
+        """Starts without a connection; the first query opens one."""
         self.conn = None
         self.lock = threading.RLock()
         self.used = 0.0
 
     def cursor(self):
+        """Returns a cursor on the shared database connection, opening the connection the first
+        time. If the connection has been idle for more than IDLE_PING_SECONDS, it is checked
+        first and reopened if it has dropped."""
         if self.conn is None:
             self.conn = pymysql.connect(host=env("database.default.hostname"), port=int(env("database.default.port", "3306")),
                                         user=env("database.default.username"), password=env("database.default.password"),
@@ -103,6 +117,7 @@ class Db:
         return self.conn.cursor()
 
     def query(self, sql: str, args=None) -> list[dict]:
+        """Runs a query that reads data, and returns the rows, each as a dict."""
         with self.lock, self.cursor() as cur:
             cur.execute(sql, args)
             return list(cur.fetchall())
@@ -115,6 +130,8 @@ class Db:
 
     @contextmanager
     def transaction(self):
+        """Use as `with db.transaction():`. Everything done inside is saved together at the end,
+        or undone completely if an error happens."""
         with self.lock:
             self.cursor().close()  # (re)connect before BEGIN
             self.conn.begin()
@@ -130,10 +147,12 @@ db = Db()
 
 
 def ids_in(ids) -> str:
+    """Makes the placeholders for an SQL `IN (...)` list: one %s per id, separated by commas."""
     return ", ".join(["%s"] * len(ids))
 
 
 def proposals(where: str, args=()) -> list[dict]:
+    """Returns the taxonomy_proposals rows that match the given SQL condition, oldest first."""
     return db.query(f"SELECT * FROM taxonomy_proposals WHERE {where} ORDER BY id", args)
 
 
@@ -143,6 +162,9 @@ class Snapshot:
     """The sf_* tables: what the prompts list, and what lookups and screening compare against."""
 
     def __init__(self, categories: list[dict], specialisations: list[dict], skills: list[dict], links: list[dict]):
+        """Stores the taxonomy's categories, specialisations and skills by id, and writes the
+        whole taxonomy out as text. That text goes at the start of every prompt sent to
+        OpenAI."""
         self.categories = {r["id"]: r for r in categories}    # id -> {id, name, group_name}
         self.specs = {r["id"]: r for r in specialisations}    # id -> {id, category_id, name}
         self.skills = {r["id"]: r["name"] for r in skills}
@@ -173,6 +195,8 @@ _taxonomy: Snapshot | None = None
 
 
 def load_taxonomy() -> Snapshot:
+    """Reads the taxonomy from the database (the sf_* tables) and makes it the copy the service
+    uses."""
     global _taxonomy
     _taxonomy = Snapshot(db.query("SELECT id, name, group_name FROM sf_categories"),
                          db.query("SELECT id, category_id, name FROM sf_specialisations"),
@@ -182,6 +206,8 @@ def load_taxonomy() -> Snapshot:
 
 
 def taxonomy() -> Snapshot:
+    """Returns the taxonomy the service is using. It is read from the database again if it is
+    older than CACHE_SECONDS."""
     if _taxonomy is None or time.monotonic() - _taxonomy.loaded > CACHE_SECONDS:
         return load_taxonomy()
     return _taxonomy
@@ -190,12 +216,12 @@ def taxonomy() -> Snapshot:
 # ---- matching names: exact, fuzzy -------------------------------------------------
 
 def normalise(name: str) -> str:
-    """Brief §7.2: case, spacing and trailing punctuation don't make a different term."""
+    """Puts a name in a standard form for comparing: case, spacing and trailing punctuation don't make a different term."""
     return " ".join(name.casefold().split()).rstrip(" .,;:!?")
 
 
 def similarity(a: str, b: str) -> int:
-    """The brief's §9.2 fuzzyTagMatch: 100 * (1 - Levenshtein distance / the longer length)."""
+    """How alike two names are, 0-100: 100 * (1 - Levenshtein distance / the longer length)."""
     return round(Levenshtein.normalized_similarity(normalise(a), normalise(b)) * 100)
 
 
@@ -211,7 +237,8 @@ def best_match(name: str, items: list[tuple]) -> tuple[str, tuple, int] | None:
 
 
 def lookup(name: str, kind: str, parent_id: int | None = None) -> dict:
-    """Brief §10.3's Tag Lookup. Never creates anything."""
+    """Finds a name in the taxonomy: an exact match first, else the most similar name if it is at least FUZZY_PCT
+    alike. Never creates anything."""
     hit = best_match(name, taxonomy().names(kind, parent_id))
     if hit is None:
         return {"found": False, "name": name}
@@ -273,7 +300,7 @@ DUPLICATES_SCHEMA = obj(results={"type": "array", "items": obj(key={"type": "int
                                                                same_as={"type": ["string", "null"]})})
 
 
-# ---- duplicate / synonym screening (brief §11.1) -----------------------------------
+# ---- duplicate / synonym screening ---------------------------------------------------
 
 def save_flag(row: dict, flag: tuple) -> None:
     """Stores a screening result, unless the row already has it (re-screens leave most rows as they were)."""
@@ -334,6 +361,8 @@ def judge_synonyms(items: list[tuple[dict, list]]) -> list[str | None]:
 
 
 def rescreen(judge: set[int] = frozenset()) -> int:
+    """Runs the duplicate and synonym check again on every pending proposal. Only the proposals
+    whose ids are in `judge` are sent to OpenAI. Returns the number of pending proposals."""
     rows = proposals("status = 'pending_review'")
     screen(rows, set(judge))
     return len(rows)
@@ -408,6 +437,9 @@ def resolve(answer: dict, t: Snapshot) -> tuple[dict, list]:
     unmatched: list[tuple] = []
 
     def take(spec_id: int, confidence: float) -> dict | None:
+        """Adds a specialisation to the tags being chosen, unless that would go over the form's
+        limits (at most MAX_CATEGORIES categories, and MAX_SPECIALISATIONS specialisations in
+        each). Returns the specialisation's entry, or None if it was not added."""
         cat = t.specs[spec_id]["category_id"]
         cats = [t.specs[s]["category_id"] for s in chosen]
         if spec_id in chosen or ((cat in cats or len(set(cats)) < MAX_CATEGORIES) and cats.count(cat) < MAX_SPECIALISATIONS):
@@ -423,7 +455,7 @@ def resolve(answer: dict, t: Snapshot) -> tuple[dict, list]:
             if skill["found"]:
                 if skill["id"] not in entry["skills"] and len(entry["skills"]) < MAX_SKILLS:
                     entry["skills"].append(skill["id"])
-            elif not lookup(name, "skill")["found"]:  # one listed under another specialisation isn't new: dropped
+            elif not lookup(name, "skill")["found"]:  # the taxonomy has it under another specialisation: dropped
                 unmatched.append(("skill", name, cat["id"], spec["id"], tag["confidence"]))
 
     for term in answer["new_terms"]:
@@ -494,6 +526,8 @@ def tag_owner(owner: str, owner_id: int, category_id: int, spec_id: int, skill_i
 
 
 def owner_user(row: dict) -> int | None:
+    """Returns the id of the user who owns the proposal's gig or showcase, or None if there is no
+    such user."""
     if row["owner_type"] not in OWNERS:
         return None
     found = db.query(f"SELECT user_id FROM {row['owner_type']}s WHERE id = %s", (row["owner_id"],))
@@ -501,6 +535,9 @@ def owner_user(row: dict) -> int | None:
 
 
 def rejection_message(row: dict, reason: str | None) -> str:
+    """Writes the message a user gets when their term is rejected: what was removed, the
+    reviewer's reason, and an existing taxonomy term to use instead, if the duplicate check
+    found one."""
     where = f" from your {row['owner_type']} #{row['owner_id']}" if row["owner_id"] is not None else ""
     text = f'The {row["kind"]} "{row["proposed_name"]}" was not added to the taxonomy, so it has been removed{where}.'
     if reason:
@@ -514,6 +551,8 @@ def rejection_message(row: dict, reason: str | None) -> str:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """Runs once when the service starts: loads the taxonomy and logs its size and the OpenAI
+    model in use."""
     t = load_taxonomy()
     log.info("taxonomy: %d categories, %d specialisations, %d skills; model %s",
              len(t.categories), len(t.specs), len(t.skills), MODEL)
@@ -521,6 +560,8 @@ async def lifespan(_app: FastAPI):
 
 
 def check_token(x_service_token: str | None = Header(None)) -> None:
+    """If a service token is set (taxonomy.serviceToken), rejects any request that doesn't send
+    it in the X-Service-Token header (HTTP 401)."""
     if SERVICE_TOKEN and not secrets.compare_digest(x_service_token or "", SERVICE_TOKEN):
         raise HTTPException(401, "Missing or wrong X-Service-Token")
 
@@ -531,6 +572,8 @@ Owner = Literal["gig", "showcase"]
 
 
 class SuggestRequest(BaseModel):
+    """Request body for /suggest: the gig or showcase text to tag, and which gig or showcase and
+    user it belongs to."""
     text: str = Field(min_length=1, max_length=20000)
     title: str | None = None
     owner_type: Owner | None = None  # what is being tagged
@@ -539,12 +582,16 @@ class SuggestRequest(BaseModel):
 
 
 class LookupRequest(BaseModel):
+    """Request body for /lookup: a name to search the taxonomy for, and whether it is a category,
+    specialisation or skill."""
     name: str = Field(min_length=1, max_length=255)
     kind: Literal["category", "specialisation", "skill"]
     parent_id: int | None = None  # a specialisation's category, or the specialisation a skill is under
 
 
 class ProposalRequest(BaseModel):
+    """Request body for /proposals: a new term a user typed into a form, and where it belongs in
+    the taxonomy."""
     name: str = Field(min_length=1, max_length=255)
     kind: Literal["specialisation", "skill"]
     category_id: int | None = None        # a new specialisation's category
@@ -556,6 +603,8 @@ class ProposalRequest(BaseModel):
 
 
 class AttachRequest(BaseModel):
+    """Request body for /proposals/attach: the proposals made before a gig or showcase was saved,
+    and the gig or showcase they now belong to."""
     proposal_ids: list[int] = Field(min_length=1)
     owner_type: Owner
     owner_id: int
@@ -563,12 +612,15 @@ class AttachRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
+    """Request body for approving or rejecting a proposal: who reviewed it, and why."""
     admin_user_id: int | None = None
     reason: str | None = Field(None, max_length=2000)
 
 
 @app.get("/health")
 def health():
+    """Reports that the service is running, plus the OpenAI model, whether an OpenAI key is set,
+    the size of the taxonomy and how many proposals are waiting for review."""
     t = taxonomy()
     pending = db.query("SELECT COUNT(*) AS n FROM taxonomy_proposals WHERE status = 'pending_review'")[0]["n"]
     return {"status": "ok", "model": MODEL, "openai_key": bool(env("OPENAI_API_KEY")), "categories": len(t.categories),
@@ -577,11 +629,11 @@ def health():
 
 @app.post("/suggest")
 def suggest(req: SuggestRequest, background: BackgroundTasks):
-    """Brief §10.1 steps 2-6. `tags`: what the model chose that the taxonomy has (exact or fuzzy
+    """`tags`: what the model chose that the taxonomy has (exact or fuzzy
     lookup), to pre-select. `pending`: every term it chose or proposed that the taxonomy lacks,
     stored as pending_review for this gig / showcase and returned now so the user sees them;
     they are screened for duplicates after the response. 503 when the model is unavailable:
-    the caller shows the manual picker (brief §10.6)."""
+    the caller shows the manual picker."""
     t = taxonomy()
     if not t.categories:
         raise HTTPException(503, "The taxonomy is empty: run php spark taxonomy:import")
@@ -603,12 +655,14 @@ def suggest(req: SuggestRequest, background: BackgroundTasks):
 
 @app.post("/lookup")
 def lookup_route(req: LookupRequest):
+    """Searches the taxonomy for a name: an exact match first, then a close spelling match.
+    See lookup()."""
     return lookup(req.name, req.kind, req.parent_id)
 
 
 @app.post("/proposals")
 def propose_route(req: ProposalRequest, background: BackgroundTasks):
-    """A term a user typed: looked up first (brief §10.3), so only a term the taxonomy lacks becomes a proposal."""
+    """A term a user typed: looked up first, so only a term the taxonomy lacks becomes a proposal."""
     hit = lookup(req.name, req.kind, req.specialisation_id if req.kind == "skill" else req.category_id)
     if hit["found"]:
         return {"found": True, "match": hit}
@@ -622,6 +676,9 @@ def propose_route(req: ProposalRequest, background: BackgroundTasks):
 
 @app.post("/proposals/attach")
 def attach(req: AttachRequest):
+    """Links the proposals made while a gig or showcase was being created to it, once it has been
+    saved. Only proposals that are still pending and not linked yet are changed. Returns the
+    ids now linked to it."""
     ids = req.proposal_ids
     db.execute(f"UPDATE taxonomy_proposals SET owner_type = %s, owner_id = %s, submitted_by_user = COALESCE(submitted_by_user, %s) "
                f"WHERE id IN ({ids_in(ids)}) AND status = 'pending_review' AND owner_id IS NULL",
