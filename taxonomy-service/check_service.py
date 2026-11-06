@@ -1,11 +1,14 @@
 """
 Checks taxonomy-service on a throwaway SQLite database, never the app's MariaDB.
 
-    .venv/bin/python check_service.py              # every endpoint, OpenAI faked (Technical Brief §14.1-14.3, adapted)
+    .venv/bin/python check_service.py              # every endpoint, OpenAI faked
     .venv/bin/python check_service.py --live       # real OpenAI calls (OPENAI_API_KEY in ../.env) on the full
                                                    # SkillsFuture taxonomy from a ranker checkout (--ranker)
 
 The tables are those the app's migrations create, cut down to the columns the service uses.
+
+Only --live needs the ranker: it reads the full taxonomy
+from the ranker's pipeline/data/data_set_v5_tax/{providers,hirers}.json.
 """
 import argparse
 import json
@@ -50,22 +53,28 @@ FIXTURE = {
 
 
 class SqliteDb(service.Db):
+    """A stand-in for the service's database: a temporary SQLite database in memory with the same
+    tables, so these checks never touch the real MariaDB."""
     def __init__(self):
+        """Creates the in-memory database and its tables."""
         super().__init__()
         self.conn = sqlite3.connect(":memory:", isolation_level=None, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
 
     def query(self, sql, args=None):
+        """Same as Db.query, but first converts the %s placeholders to SQLite's ?."""
         with self.lock:
             return [dict(r) for r in self.conn.execute(sql.replace("%s", "?"), args or ()).fetchall()]
 
     def execute(self, sql, args=None):
+        """Same as Db.execute, but first converts the %s placeholders to SQLite's ?."""
         with self.lock:
             return self.conn.execute(sql.replace("%s", "?"), args or ()).lastrowid
 
     @contextmanager
     def transaction(self):
+        """Same as Db.transaction, using SQLite's BEGIN, COMMIT and ROLLBACK."""
         with self.lock:
             self.conn.execute("BEGIN")
             try:
@@ -77,6 +86,8 @@ class SqliteDb(service.Db):
 
 
 def load(db: SqliteDb, taxonomy: dict) -> None:
+    """Fills the test database with a taxonomy given as {category: {specialisation: [skills]}},
+    then makes the service read it."""
     skills: dict[str, int] = {}
     for category, specs in taxonomy.items():
         cat_id = db.execute("INSERT INTO sf_categories (name) VALUES (%s)", (category,))
@@ -94,9 +105,12 @@ class FakeAI:
     from `same_as` (term name -> existing name); raises `error` when set."""
 
     def __init__(self):
+        """Starts with empty answers and no recorded calls."""
         self.answer, self.same_as, self.error, self.calls = {"tags": [], "new_terms": []}, {}, None, []
 
     def __call__(self, system, user, schema):
+        """Pretends to be OpenAI. Records the call, raises `error` if one is set, and otherwise
+        returns `answer` for a tag suggestion, or the `same_as` matches for a synonym check."""
         self.calls.append(("suggest" if "tags" in schema["properties"] else "duplicates", user))
         if self.error:
             raise self.error
@@ -107,6 +121,7 @@ class FakeAI:
 
 
 def check(label: str, ok: bool, detail="") -> None:
+    """Prints PASS or FAIL for one check, and counts the failures in check.failed."""
     print(f"  {'PASS' if ok else 'FAIL'}  {label}" + (f"   ({detail})" if detail and not ok else ""))
     if not ok:
         check.failed += 1
@@ -116,6 +131,8 @@ check.failed = 0
 
 
 def run_faked() -> None:
+    """Tests every endpoint on the small sample taxonomy (FIXTURE), with OpenAI replaced by
+    FakeAI, printing PASS or FAIL for each check."""
     db = service.db = SqliteDb()
     load(db, FIXTURE)
     t = service.taxonomy()

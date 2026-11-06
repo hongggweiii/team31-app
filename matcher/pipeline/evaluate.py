@@ -1,3 +1,5 @@
+# In the ranker: pipeline/common/evaluate.py (same code).
+# Used here: nothing calls it; rerank_ltr.py imports it when it loads.
 """
 IR evaluation metrics: Precision@K, Recall@K, NDCG@K (graded relevance), and
 MRR (Mean Reciprocal Rank), against the ground_truth relevance scores

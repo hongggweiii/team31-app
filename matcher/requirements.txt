@@ -1,3 +1,5 @@
+# Not the ranker's requirements files: only what app.py and the pipeline/ modules it
+# imports need, plus the service's own (fastapi, uvicorn, pymysql for MariaDB, python-dotenv).
 fastapi>=0.110
 uvicorn>=0.29
 numpy

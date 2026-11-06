@@ -1,3 +1,7 @@
+# In the ranker: pipeline/common/corpus.py (same code).
+# Used here: hirer_text (app.py), the BM25 tokenisers (through retrieval_bm25.py) and
+# provider_text (check_parity.py). embedding-service/embedding.py has its own copy of
+# provider_text and hirer_text.
 """
 Turns a provider/hirer JSON record into matchable text.
 

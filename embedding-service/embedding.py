@@ -2,10 +2,10 @@
 Provider profile / gig -> embedding, copied from the ranker repo so the web
 app produces exactly the vectors the ranker was built and evaluated on.
 
-    provider_text, hirer_text           ranker/pipeline/corpus.py
+    provider_text, hirer_text           ranker/pipeline/common/corpus.py
     BASE_MODEL_NAME, QUERY_PREFIX_GENERIC,
     _get_model, _truncate_and_normalize,
-    encode_docs, encode_queries         ranker/pipeline/retrieval_dense.py
+    encode_docs, encode_queries         ranker/pipeline/recall/retrieval_dense.py
 
 Keep those copies in sync with the ranker -- any change to the field list,
 field order, model, prefix or normalisation changes every vector, and existing
@@ -31,12 +31,14 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 
+# From ranker retrieval_dense.py, except EMBED_DIM (the ranker passes truncate_dim to each call instead).
 BASE_MODEL_NAME = "mixedbread-ai/mxbai-embed-large-v1"
 EMBED_DIM = 1024
 QUERY_PREFIX_GENERIC = "Represent this sentence for searching relevant passages: "
 
 _model_cache: dict[str, SentenceTransformer] = {}
 
+# Choosing the device; the ranker lets sentence-transformers choose it.
 _DEVICE_AVAILABLE = {
     "mps": lambda: torch.backends.mps.is_available(),
     "cuda": lambda: torch.cuda.is_available(),
@@ -56,12 +58,15 @@ def embed_device() -> str | None:
     return device
 
 
+# ranker retrieval_dense._get_model, plus device=embed_device()
 def _get_model(model_name: str = BASE_MODEL_NAME) -> SentenceTransformer:
+    """Returns the embedding model. It is loaded the first time only; later calls reuse it."""
     if model_name not in _model_cache:
         _model_cache[model_name] = SentenceTransformer(model_name, device=embed_device())
     return _model_cache[model_name]
 
 
+# From ranker corpus.py: the same code.
 def provider_text(p: dict) -> str:
     """Provider showcase -> one text blob (the text that gets embedded).
 
@@ -90,7 +95,12 @@ def hirer_text(h: dict) -> str:
     return " ".join(x for x in parts if x)
 
 
+# From ranker retrieval_dense.py: the same code.
 def _truncate_and_normalize(vecs: np.ndarray, truncate_dim: int | None) -> np.ndarray:
+    """Cuts each vector down to its first truncate_dim numbers (this model is trained so that
+    shorter vectors still work), then scales it to length 1. With every vector at length 1,
+    the similarity of two vectors is just their dot product. All-zero vectors are left as they
+    are."""
     if truncate_dim is not None:
         vecs = vecs[:, :truncate_dim]
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
@@ -112,6 +122,8 @@ def encode_queries(
     return model.encode([query_prefix + t for t in texts], convert_to_numpy=True, show_progress_bar=False)
 
 
+# What app.py serves. Each is encode_* then _truncate_and_normalize to EMBED_DIM:
+# the steps the ranker's rank_from_raw takes before scoring.
 def embed_provider(p: dict) -> list[float]:
     """One provider profile -> unit-length EMBED_DIM vector (cosine-ready)."""
     raw = encode_docs([provider_text(p)])

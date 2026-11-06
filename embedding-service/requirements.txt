@@ -1,3 +1,4 @@
+# Not the ranker's requirements files: only what embedding.py and app.py need.
 fastapi>=0.110
 uvicorn>=0.29
 sentence-transformers>=3.0     # same floor as ranker/pipeline/requirements-rerank.txt

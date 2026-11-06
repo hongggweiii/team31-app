@@ -1,3 +1,6 @@
+# In the ranker: pipeline/recall/retrieval_bm25.py (same code, except imports and
+# SYNONYMS_PATH).
+# Used here: BM25Retriever, refined (app.py).
 """
 Sparse retrieval: Okapi BM25 over provider showcase text.
 

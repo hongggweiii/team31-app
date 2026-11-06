@@ -1,3 +1,7 @@
+# In the ranker: pipeline/recall/retrieval_dense.py (same code, except imports).
+# Used here: _truncate_and_normalize (app.py, MATCHER_CORPUS mode only) and
+# encode_docs / encode_queries (check_parity.py). app.py never loads the model:
+# embedding-service/embedding.py copies this file's encoding code and embeds for it.
 """
 Dense retrieval: Matryoshka embeddings + cosine similarity.
 

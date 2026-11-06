@@ -1,3 +1,5 @@
+# In the ranker: pipeline/recall/retrieval_rrf.py (same code).
+# Used here: rrf_fuse (app.py).
 """RRF (Reciprocal Rank Fusion).
 
 Card 2's three recall channels -- taxonomy (match scoring), lexical (BM25) and

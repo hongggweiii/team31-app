@@ -1,3 +1,5 @@
+# No longer in the ranker.
+# Used here: nothing calls it; rerank_ltr.py imports TAXONOMY_FEATURES from it when it loads.
 """
 Taxonomy recall channel (Card 2) and taxonomy match features (Card 3).
 
