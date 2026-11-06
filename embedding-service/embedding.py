@@ -47,7 +47,14 @@ _DEVICE_AVAILABLE = {
 
 
 def embed_device() -> str | None:
-    """EMBED_DEVICE, checked; None when unset (sentence-transformers decides)."""
+    """EMBED_DEVICE, checked; None when unset (sentence-transformers decides).
+
+    Returns:
+        "mps", "cuda", "cpu", or None.
+
+    Raises:
+        RuntimeError: EMBED_DEVICE names an unknown device, or one torch can't use here.
+    """
     device = os.environ.get("EMBED_DEVICE", "").strip().lower() or None
     if device is None:
         return None
@@ -59,6 +66,7 @@ def embed_device() -> str | None:
 
 
 # ranker retrieval_dense._get_model, plus device=embed_device()
+# In: a Hugging Face model name. Out: the loaded SentenceTransformer, cached per process.
 def _get_model(model_name: str = BASE_MODEL_NAME) -> SentenceTransformer:
     """Returns the embedding model. It is loaded the first time only; later calls reuse it."""
     if model_name not in _model_cache:
@@ -67,6 +75,8 @@ def _get_model(model_name: str = BASE_MODEL_NAME) -> SentenceTransformer:
 
 
 # From ranker corpus.py: the same code.
+# In: a provider record (the five text fields). Out: the fields in order, empty ones
+# skipped, joined by single spaces.
 def provider_text(p: dict) -> str:
     """Provider showcase -> one text blob (the text that gets embedded).
 
@@ -84,6 +94,9 @@ def provider_text(p: dict) -> str:
     return " ".join(x for x in parts if x)
 
 
+# From ranker corpus.py: the same code.
+# In: a gig record (hire_title, hire_description, hire_description_additional_notes).
+# Out: those fields joined like provider_text.
 def hirer_text(h: dict) -> str:
     """Hirer gig posting -> one query text blob (this is what would get
     embedded live at /match time per CLAUDE.md)."""
@@ -96,6 +109,8 @@ def hirer_text(h: dict) -> str:
 
 
 # From ranker retrieval_dense.py: the same code.
+# In: an (n, d) array and a dimension (or None to keep all). Out: an (n, dim) array of
+# unit-length rows, so a dot product is the cosine similarity; all-zero rows stay zeros.
 def _truncate_and_normalize(vecs: np.ndarray, truncate_dim: int | None) -> np.ndarray:
     """Cuts each vector down to its first truncate_dim numbers (this model is trained so that
     shorter vectors still work), then scales it to length 1. With every vector at length 1,
@@ -108,12 +123,17 @@ def _truncate_and_normalize(vecs: np.ndarray, truncate_dim: int | None) -> np.nd
     return vecs / norms
 
 
+# From ranker retrieval_dense.py: the same code.
+# In: texts. Out: the raw (n, 1024) model output, not normalised.
 def encode_docs(texts: list[str], model_name: str = BASE_MODEL_NAME) -> np.ndarray:
     """Batch-encode passage/document texts (no query instruction prefix)."""
     model = _get_model(model_name)
     return model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
 
+# From ranker retrieval_dense.py: the same code.
+# In: query texts. Out: the raw (n, 1024) output, each text prefixed with
+# QUERY_PREFIX_GENERIC first.
 def encode_queries(
     texts: list[str], model_name: str = BASE_MODEL_NAME, query_prefix: str = QUERY_PREFIX_GENERIC,
 ) -> np.ndarray:
@@ -125,19 +145,40 @@ def encode_queries(
 # What app.py serves. Each is encode_* then _truncate_and_normalize to EMBED_DIM:
 # the steps the ranker's rank_from_raw takes before scoring.
 def embed_provider(p: dict) -> list[float]:
-    """One provider profile -> unit-length EMBED_DIM vector (cosine-ready)."""
+    """One provider profile -> unit-length EMBED_DIM vector (cosine-ready).
+
+    Args:
+        p: A provider record with the five text fields (any may be missing or None).
+
+    Returns:
+        EMBED_DIM floats.
+    """
     raw = encode_docs([provider_text(p)])
     return _truncate_and_normalize(raw, EMBED_DIM)[0].tolist()
 
 
 def embed_providers(ps: list[dict]) -> list[list[float]]:
-    """Many provider profiles in one encode call -> unit-length vectors, in order."""
+    """Many provider profiles in one encode call -> unit-length vectors, in order.
+
+    Args:
+        ps: Provider records, as for embed_provider.
+
+    Returns:
+        One list of EMBED_DIM floats per record, in input order.
+    """
     raw = encode_docs([provider_text(p) for p in ps])
     return _truncate_and_normalize(raw, EMBED_DIM).tolist()
 
 
 def embed_gigs(gs: list[dict]) -> list[list[float]]:
     """Many gigs (query side, with the instruction prefix) in one encode call ->
-    unit-length vectors, in order."""
+    unit-length vectors, in order.
+
+    Args:
+        gs: Gig records (hire_title, hire_description, hire_description_additional_notes).
+
+    Returns:
+        One list of EMBED_DIM floats per gig, in input order.
+    """
     raw = encode_queries([hirer_text(g) for g in gs])
     return _truncate_and_normalize(raw, EMBED_DIM).tolist()

@@ -87,7 +87,15 @@ log = logging.getLogger("uvicorn.error")
 
 def env(key: str, default: str | None = None) -> str | None:
     """A setting from the app's .env (environment variables win), so the matcher
-    uses the same database and embedding-service as the app."""
+    uses the same database and embedding-service as the app.
+
+    Args:
+        key: The setting's name, e.g. "database.default.hostname".
+        default: Returned when it is set nowhere.
+
+    Returns:
+        The value (surrounding quotes removed), or default.
+    """
     if key in os.environ:
         return os.environ[key]
     path = HERE.parent / ".env"
@@ -116,7 +124,14 @@ class Catalogue:
     def __init__(self, providers: list[dict], unit_vectors: np.ndarray, skill_vectors: dict | None = None):
         """Prepares everything needed to match gigs against these showcases: their ids, their
         vectors, a keyword search index (BM25) and the tag matcher. This happens once per
-        catalogue, so a match request only has to work on the new gig."""
+        catalogue, so a match request only has to work on the new gig.
+
+        Args:
+            providers: Ranker-format records, each with provider_id, the five text fields,
+                years_experience and tags.
+            unit_vectors: One unit-length vector per provider, in the same order.
+            skill_vectors: Skill name -> vector, for the skill_soft feature; None turns it off.
+        """
         self.providers = providers
         self.ids = [p["provider_id"] for p in providers]
         self.by_id = {p["provider_id"]: p for p in providers}
@@ -131,7 +146,11 @@ class Catalogue:
 def dense_rank(cat: Catalogue, gig_unit: np.ndarray) -> list[tuple[int, float]]:
     """retrieval_dense.rank_from_raw's last step. Both sides are already the unit-length
     float16 vectors rank_from_raw would compute, so they are not normalised again (that
-    would only re-round them in float16); the result is bit-identical to the ranker's."""
+    would only re-round them in float16); the result is bit-identical to the ranker's.
+
+    Returns:
+        (provider_id, cosine similarity) for every provider, most similar first.
+    """
     scores = cat.vectors @ np.asarray(gig_unit, dtype=np.float16)
     return sorted(zip(cat.ids, scores.tolist()), key=lambda x: x[1], reverse=True)
 
@@ -148,23 +167,40 @@ def candidates(cat: Catalogue, gig: dict, gig_unit: np.ndarray) -> list[dict]:
 
     This is the per-gig step of the ranker's features.py and tag_features.py, with values
     rounded as features.py rounds them. The ranker's serve.py rebuilds the tag matcher for
-    every gig; this reuses the catalogue's one, which gives the same results."""
+    every gig; this reuses the catalogue's one, which gives the same results.
+
+    Args:
+        cat: The catalogue.
+        gig: The gig as a dict: hire_title, hire_description and tags.categories.
+        gig_unit: Its unit-length query vector.
+
+    Returns:
+        Up to POOL_SIZE rows in RRF order: provider_id and the 17 raw features
+        (the three DEAD_FEATURES always 0.0). [] for an empty catalogue.
+
+    Raises:
+        HTTPException: 503 if a gig skill no showcase has must be embedded and embedding-service fails.
+    """
     if not cat.providers:
         return []
     h = gig
+    # Two independent rankings of the whole catalogue (keywords and meaning), fused by RRF.
     bm25_ranked = cat.bm25.rank(hirer_text(h), query_title=h["hire_title"])
     dense_ranked = dense_rank(cat, gig_unit)
     fused = rrf_fuse(bm25_ranked, dense_ranked, k=60)
 
+    # Each candidate's score and position in both rankings: these are model features.
     bm25_score = dict(bm25_ranked)
     dense_score = dict(dense_ranked)
     bm25_pos = {pid: r + 1 for r, (pid, _) in enumerate(bm25_ranked)}
     dense_pos = {pid: r + 1 for r, (pid, _) in enumerate(dense_ranked)}
+    # Register this gig's tags with the tag matcher (it compares one gig at a time).
     cat.tags.gig[GIG_KEY] = tag_axes(h)
     missing = [k for k in cat.tags.gig[GIG_KEY][2] if k not in cat.tags.vec] if cat.tags.vec else []
     if missing:  # a gig skill no corpus record has: embed its name like embed_skills does
         cat.tags.vec.update(embed_skill_names(missing))
 
+    # The model scores only the RRF top POOL_SIZE: one feature row each.
     rows = []
     for rrf_pos, (pid, rrf_score) in enumerate(fused[:POOL_SIZE], start=1):
         p_tax = cat.by_id[pid]
@@ -193,11 +229,21 @@ def score(rows: list[dict]) -> list[dict]:
     below this gig's average it is), because the model was trained that way. Then the model
     gives each candidate a raw score (its margin). The margins are rescaled to 0-100 for
     display: 100 for the best candidate and 0 for the worst. These are the same steps as the
-    ranker's serve.py."""
+    ranker's serve.py.
+
+    Args:
+        rows: candidates()'s feature rows.
+
+    Returns:
+        One dict per row, best first: provider_id, inputs (the z-scored features),
+        margin (the model's raw output) and score (0-100 within this gig).
+    """
     if not rows:
         return []
+    # z-score the drifting features within this gig, as the model was trained.
     inputs = [dict(r) for r in rows]
     normalize_by_query(inputs, list(SCORE_FEATURES), "zscore")
+    # Features in FEATURES order: the model stores no names, only positions.
     margins = model.predict(xgb.DMatrix(np.array([[r[f] for f in FEATURES] for r in inputs], dtype=np.float32)))
     lo = float(margins.min())
     span = (float(margins.max()) - lo) or 1.0
@@ -210,7 +256,16 @@ def score(rows: list[dict]) -> list[dict]:
 def rank(cat: Catalogue, gig: dict, gig_unit: np.ndarray) -> list[dict]:
     """Ranks the showcases for one gig, best first, by calling candidates() and then score().
     These are the same steps as the ranker's serve.py. check_parity.py uses this function;
-    /match calls the two steps separately so it can time each one."""
+    /match calls the two steps separately so it can time each one.
+
+    Args:
+        cat: The catalogue to rank.
+        gig: The gig as a dict, with its tags.
+        gig_unit: Its unit-length query vector.
+
+    Returns:
+        score()'s output.
+    """
     return score(candidates(cat, gig, gig_unit))
 
 
@@ -218,7 +273,16 @@ def response(ranked: list[dict], cat: Catalogue, top_k: int) -> dict:
     """Builds the reply in the ranker's format (its example_io.json): the top_k showcases, each
     with its rank, score, a short profile and the feature values the model saw, plus a `meta`
     block describing the pipeline. The ranker's newer serve.py also adds the gig's hire_id and
-    tier details; this reply keeps example_io.json's format, which the PHP app reads."""
+    tier details; this reply keeps example_io.json's format, which the PHP app reads.
+
+    Args:
+        ranked: score()'s output (may be empty).
+        cat: The catalogue the gig was ranked against.
+        top_k: How many results to return.
+
+    Returns:
+        {"results": [...], "meta": {..., "catalogue_size", "candidate_pool", "returned"}}.
+    """
     results = []
     for rank_, c in enumerate(ranked[:top_k], start=1):
         p, x = cat.by_id[c["provider_id"]], c["inputs"]
@@ -252,7 +316,19 @@ def response(ranked: list[dict], cat: Catalogue, top_k: int) -> dict:
 def post_json(path: str, body: dict, timeout: float) -> dict:
     """Sends a JSON request to the embedding service and returns its JSON reply. If the service
     can't be reached, takes too long, returns an error or sends back something unreadable, the
-    caller gets HTTP 503 (service unavailable)."""
+    caller gets HTTP 503 (service unavailable).
+
+    Args:
+        path: e.g. "embed/gigs", relative to EMBEDDING_URL.
+        body: The JSON body.
+        timeout: Seconds to wait.
+
+    Returns:
+        The decoded response.
+
+    Raises:
+        HTTPException: 503 on any failure.
+    """
     req = urllib.request.Request(EMBEDDING_URL + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -262,7 +338,17 @@ def post_json(path: str, body: dict, timeout: float) -> dict:
 
 
 def embed_gig(gig: dict) -> tuple[np.ndarray, str]:
-    """The gig's unit-length query vector, embedded now (nothing is read from or written to MariaDB here)."""
+    """The gig's unit-length query vector, embedded now (nothing is read from or written to MariaDB here).
+
+    Args:
+        gig: The request as a dict (hire_title, hire_description, ...).
+
+    Returns:
+        (the vector as float32, the model name embedding-service reported).
+
+    Raises:
+        HTTPException: 503 when embedding-service fails or takes longer than EMBED_TIMEOUT.
+    """
     data = post_json("embed/gigs", {"gigs": [{"hire_title": gig["hire_title"], "hire_description": gig["hire_description"],
                                               "hire_description_additional_notes": None}]}, EMBED_TIMEOUT)
     return np.asarray(data["embeddings"][0], dtype=np.float32), data.get("model", "")
@@ -270,7 +356,14 @@ def embed_gig(gig: dict) -> tuple[np.ndarray, str]:
 
 def embed_skill_names(names: list[str]) -> dict:
     """Skill-name vectors as tag_features.embed_skills makes them (document side,
-    unit length, rounded to 6 places), via embedding-service."""
+    unit length, rounded to 6 places), via embedding-service.
+
+    Args:
+        names: Skill names the cached skill vectors don't have.
+
+    Returns:
+        Skill name -> vector.
+    """
     data = post_json("embed/providers", {"providers": [{"about_title": n} for n in names]}, EMBED_TIMEOUT)
     return {n: np.asarray(v, dtype=np.float32).round(6) for n, v in zip(names, data["embeddings"])}
 
@@ -286,7 +379,16 @@ _db_lock = threading.Lock()  # one connection, shared by requests, the refresh t
 def db_query(sql: str, args=None) -> list[dict]:
     """Runs one SQL query on the app's MariaDB database and returns the rows, each as a dict. The
     connection is opened the first time it is needed, with the database settings from the
-    app's .env file, and reopened if it has dropped."""
+    app's .env file, and reopened if it has dropped. Calls are serialised by a lock, because
+    requests, the refresh thread and background saves share the connection.
+
+    Args:
+        sql: The query, with %s placeholders.
+        args: Their values.
+
+    Returns:
+        The rows as dicts (empty for statements that return none).
+    """
     global _conn
     with _db_lock:
         if _conn is None:
@@ -303,7 +405,14 @@ def db_query(sql: str, args=None) -> list[dict]:
 def load_tags(owner: str) -> dict[int, dict]:
     """The app's SkillsFuture tags (sf_v1) per gig / showcase, in the ranker's `tags`
     shape: the owner's specialisations under their categories, with the skills chosen
-    for each. Mirrors Taxonomy::tags() in app/Libraries/Taxonomy.php."""
+    for each. Mirrors Taxonomy::tags() in app/Libraries/Taxonomy.php.
+
+    Args:
+        owner: "showcase" or "gig" (part of the table names; never user input).
+
+    Returns:
+        Owner id -> {"taxonomy_version", "categories": [...]}; owners without tags are absent.
+    """
     specs = db_query(f"SELECT l.{owner}_id AS id, s.id AS spec_id, s.name AS spec, c.name AS category, c.group_name "
                      f"FROM {owner}_specialisations l JOIN sf_specialisations s ON s.id = l.specialisation_id "
                      "JOIN sf_categories c ON c.id = s.category_id")
@@ -329,11 +438,16 @@ def load_catalogue() -> Catalogue:
     This replaces the ranker reading providers.json. fields_json uses the ranker's field names
     (the PHP app writes it in ProviderEmbedder::showcaseFields), so the ranker's code can read
     it unchanged. It holds only the text fields and years_experience, with no industry, so
-    each result's provider.industry is null."""
+    each result's provider.industry is null.
+
+    Returns:
+        The Catalogue; empty (no providers) when nothing is published and embedded.
+    """
     rows = db_query("SELECT e.showcase_id AS id, e.fields_json, VEC_ToText(e.embedding) AS embedding "
                     "FROM showcase_embeddings e JOIN showcases s ON s.id = e.showcase_id "
                     "WHERE s.status = 'published' AND e.fields_json IS NOT NULL ORDER BY e.showcase_id")
     tags = load_tags("showcase")
+    # Each provider: its id, the record it was embedded from, and its tags.
     providers = [{"provider_id": r["id"], **json.loads(r["fields_json"]), "tags": tags.get(r["id"], {})} for r in rows]
     vectors = (np.stack([np.asarray(json.loads(r["embedding"]), dtype=np.float32) for r in rows])
                if rows else np.zeros((0, DENSE_DIM), np.float32))
@@ -346,7 +460,12 @@ def load_catalogue() -> Catalogue:
 
 
 def catalogue_version() -> tuple:
-    """Changes whenever a showcase or its vector is added, edited, unpublished or removed."""
+    """Changes whenever a showcase or its vector is added, edited, unpublished or removed.
+
+    Returns:
+        (embedding count, latest embedding update, published count, latest showcase
+        update): one cheap query, compared every REFRESH_SECONDS.
+    """
     return tuple(db_query(
         "SELECT (SELECT COUNT(*) FROM showcase_embeddings) AS n_vectors, "
         "(SELECT MAX(updated_at) FROM showcase_embeddings) AS vectors_at, "
@@ -356,7 +475,13 @@ def catalogue_version() -> tuple:
 
 def save_gig_embedding(gig: dict, vector: np.ndarray, model_name: str) -> None:
     """Runs after the response has been sent: stores the gig's vector and the
-    ranker-format record it was embedded from. A failure is logged, never raised."""
+    ranker-format record it was embedded from. A failure is logged, never raised.
+
+    Args:
+        gig: The request as a dict (hire_id, hire_title, hire_description).
+        vector: Its vector from embed_gig().
+        model_name: The model that produced it.
+    """
     fields = {"hire_title": gig["hire_title"], "hire_description": gig["hire_description"],
               "hire_description_additional_notes": ""}
     try:
@@ -394,11 +519,12 @@ def refresh_forever() -> None:
             warm_embedding_service()
             warmed = time.monotonic()
         try:
+            # One cheap query; the full reload only runs when something changed.
             version = catalogue_version()
             if version != state["version"]:
                 state["catalogue"], state["version"] = load_catalogue(), version
                 log.info("catalogue reloaded: %d showcases", len(state["catalogue"].providers))
-        except Exception:
+        except Exception:  # e.g. the database is unreachable: keep serving, retry next time
             log.exception("catalogue refresh failed; still serving the previous one")
 
 
@@ -409,7 +535,16 @@ def refresh_forever() -> None:
 def build_skill_vectors(skills: list, cache: Path) -> dict:
     """tag_features.embed_skills, cached. Built in a child process: it runs torch on
     the CPU, and torch + xgboost (loaded here) in one process hangs on macOS -- the
-    ranker runs tag_features.py on its own for the same reason."""
+    ranker runs tag_features.py on its own for the same reason.
+
+    Args:
+        skills: Every skill name to have a vector for.
+        cache: The cache file; its name is derived from the skill list, so a changed
+            taxonomy gets a new file.
+
+    Returns:
+        Skill name -> unit-length vector.
+    """
     if not cache.exists():
         CACHE.mkdir(exist_ok=True)
         wanted = CACHE / "skills.json"
@@ -426,7 +561,14 @@ def load_ranker_corpus(ranker: Path) -> Catalogue:
     """Loads the ranker's own test data (its 3,024 providers) instead of the app's showcases.
     This is only used when MATCHER_CORPUS is set, to check that the matcher gives the same
     results as the ranker. The provider vectors are read from cache/ if check_parity.py saved
-    them there; otherwise they are requested from the embedding service and saved in cache/."""
+    them there; otherwise they are requested from the embedding service and saved in cache/.
+
+    Args:
+        ranker: A checkout of the ranker repo.
+
+    Returns:
+        The Catalogue of the ranker's providers.
+    """
     data = ranker / "pipeline" / "data" / "data_set_v5_tax"
     providers = json.loads((data / "providers.json").read_text(encoding="utf-8"))
     hirers = json.loads((data / "hirers.json").read_text(encoding="utf-8"))
@@ -457,7 +599,8 @@ async def lifespan(_app: FastAPI):
     """Runs once when the matcher starts, before it accepts requests. It loads the showcases to
     match against: from MariaDB, or the ranker's data when MATCHER_CORPUS is set. For MariaDB
     it also starts the background thread that reloads them when they change. Finally it sends
-    the embedding service a first request so it is ready."""
+    the embedding service a first request so it is ready. An empty catalogue is fine: matching
+    then answers an empty list."""
     if RANKER:
         state["catalogue"] = load_ranker_corpus(Path(RANKER))
     else:
@@ -483,7 +626,8 @@ class TaxonomySpecialisation(BaseModel):
 
 class TaxonomyCategory(BaseModel):
     """A category the gig is tagged with, and its specialisations. The request's `taxonomy` is a
-    list of these, in the same format as the tags in the ranker's data."""
+    list of these, in the same format as the tags in the ranker's data. Only the names are used
+    for ranking."""
     name: Name
     group: str | None = None
     specialisations: list[TaxonomySpecialisation] = Field(default_factory=list)
@@ -503,7 +647,11 @@ class MatchRequest(BaseModel):
     @model_validator(mode="after")
     def has_text(self):
         """Rejects the request (HTTP 422) if the gig has neither a title nor a description,
-        because there would be no text to match on."""
+        because there would be no text to match on.
+
+        Raises:
+            ValueError: Turned into a 422 by FastAPI.
+        """
         if not (self.hire_title.strip() or self.hire_description.strip()):
             raise ValueError("hire_title and hire_description are both empty: there is no text to match")
         return self
@@ -512,7 +660,11 @@ class MatchRequest(BaseModel):
 @app.get("/health")
 async def health():
     """Reports that the matcher is running, which showcases it matches against and how many, and
-    which ranker model and version it uses."""
+    which ranker model and version it uses.
+
+    Returns:
+        {"status": "ok", "corpus", "providers", "ranker", "ranker_version"}.
+    """
     return {"status": "ok", "corpus": RANKER or "mariadb", "providers": len(state["catalogue"].providers),
             "ranker": MODEL_PATH.name, "ranker_version": (HERE / "RANKER_VERSION").read_text().strip()}
 
@@ -527,7 +679,18 @@ async def match(req: MatchRequest, background: BackgroundTasks):
     showcases most likely to fit, by keywords and by meaning; work out the 17 numbers
     (features) the ranker model looks at for each; let the model put them in order. The gig's
     vector is saved to the database only after the reply has been sent, so saving never slows
-    the reply down. If no showcases are published yet, it returns an empty list straight away."""
+    the reply down. If no showcases are published yet, it returns an empty list straight away.
+
+    Args:
+        req: The validated request (invalid ones never get here: FastAPI answers 422).
+        background: Runs save_gig_embedding after the response is sent.
+
+    Returns:
+        response()'s {"results", "meta"}.
+
+    Raises:
+        HTTPException: 503 when the gig can't be embedded.
+    """
     t0 = time.perf_counter()
     cat = state["catalogue"]
     if not cat.providers:  # nothing published and embedded yet: no candidates, so no need to embed the gig

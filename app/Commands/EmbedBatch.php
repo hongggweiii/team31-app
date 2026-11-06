@@ -35,6 +35,13 @@ class EmbedBatch extends BaseCommand
         '--ids'  => 'Only these showcase ids (comma-separated) instead of every published showcase',
     ];
 
+    /**
+     * `php spark embed:batch showcases [--size N] [--all] [--ids 1,2,3]`
+     *
+     * @param list<string> $params Positional arguments: the target ("showcases")
+     *
+     * @return int EXIT_SUCCESS, EXIT_ERROR (a showcase failed) or EXIT_USER_INPUT (bad arguments)
+     */
     public function run(array $params)
     {
         $target = $params[0] ?? '';
@@ -84,6 +91,8 @@ class EmbedBatch extends BaseCommand
         $counts   = ['embedded' => 0, 'unchanged' => 0, 'empty' => 0, 'failed' => 0];
         $lastId   = 0;
 
+        // Keyset pagination by id (id > the last page's last id): stable even while
+        // showcases are added, and no OFFSET scans.
         while (true) {
             $query = $db->table('showcases')->where('status', 'published')->where('id >', $lastId);
             if ($ids !== null) {
@@ -98,6 +107,8 @@ class EmbedBatch extends BaseCommand
             $fields = ProviderEmbedder::showcaseFields($page);
             $stored = $all ? [] : $store->stored(array_keys($fields));
 
+            // Sort the page: empty text is skipped; same hash and record means unchanged
+            // (only re-stamped if the showcase was saved since); the rest is embedded.
             $todo    = [];
             $checked = []; // unchanged, but the showcase was updated after its vector
             $updated = array_column($page, 'updated_at', 'id');
@@ -115,6 +126,7 @@ class EmbedBatch extends BaseCommand
                 }
             }
 
+            // One embedding request and one upsert per page; a failure only loses this page.
             try {
                 $store->touch($checked);
                 $result = $embedder->embedMany($todo);
@@ -135,7 +147,9 @@ class EmbedBatch extends BaseCommand
     }
 
     /**
-     * @param array<string, int> $counts
+     * @param array<string, int> $counts e.g. ['embedded' => 3, 'unchanged' => 10, ...]
+     *
+     * @return string e.g. "3 embedded, 10 unchanged, 0 empty, 0 failed"
      */
     private function summary(array $counts): string
     {

@@ -33,6 +33,10 @@ class ProviderEmbedder
     private Embedding $config;
     private CURLRequest $client;
 
+    /**
+     * @param Embedding|null   $config Defaults to Config\Embedding (URL, timeout, dimensions)
+     * @param CURLRequest|null $client Defaults to a client for embedding-service; tests pass a mock
+     */
     public function __construct(?Embedding $config = null, ?CURLRequest $client = null)
     {
         $this->config = $config ?? config(Embedding::class);
@@ -45,6 +49,8 @@ class ProviderEmbedder
     /**
      * Embeds a saved showcase, reading it and its services and achievements
      * from the database.
+     *
+     * @param int $showcaseId An existing showcase
      *
      * @return array{showcase_id: int, model: string, dimensions: int, embedding: list<float>}
      *
@@ -78,6 +84,7 @@ class ProviderEmbedder
 
         $ids      = array_map(static fn (array $s): int => (int) $s['id'], $showcases);
         $db       = db_connect();
+        // Loads one child table for every showcase in the list (one query), in display order.
         $children = static function (string $table, string $columns) use ($db, $ids): array {
             $byShowcase = [];
             $rows       = $db->table($table)->select("showcase_id, {$columns}")->whereIn('showcase_id', $ids)
@@ -105,7 +112,9 @@ class ProviderEmbedder
      * The exact text embedding-service/ embeds for these fields (provider_text
      * in embedding.py: FIELDS in order, empty ones skipped, space-joined).
      *
-     * @param array<string, mixed> $provider
+     * @param array<string, mixed> $provider A record with FIELDS (others ignored)
+     *
+     * @return string The fields in FIELDS order, empty ones skipped, joined by single spaces
      */
     public static function providerText(array $provider): string
     {
@@ -118,7 +127,9 @@ class ProviderEmbedder
      * sha256 of providerText(), stored next to each vector so batches can skip
      * showcases whose embedded text hasn't changed.
      *
-     * @param array<string, mixed> $provider
+     * @param array<string, mixed> $provider A record with FIELDS
+     *
+     * @return string 64 lowercase hex characters
      */
     public static function textHash(array $provider): string
     {
@@ -210,6 +221,10 @@ class ProviderEmbedder
     }
 
     /**
+     * The request body for one provider: only the text fields the service accepts.
+     *
+     * @param array<string, mixed> $provider A record (e.g. with years_experience too)
+     *
      * @return array<string, mixed> Exactly FIELDS, missing ones null
      */
     private static function payload(array $provider): array
@@ -224,6 +239,11 @@ class ProviderEmbedder
 
     /**
      * POSTs JSON to the service and returns the decoded body.
+     *
+     * @param string               $path Relative to Config\Embedding::$baseURL, e.g. "embed/providers"
+     * @param array<string, mixed> $json The request body
+     *
+     * @return mixed The decoded JSON (null if it wasn't JSON)
      *
      * @throws RuntimeException On a non-200 response
      */
@@ -245,7 +265,11 @@ class ProviderEmbedder
     }
 
     /**
-     * @return list<float>
+     * Guards against a malformed answer before anything is stored.
+     *
+     * @param mixed $embedding One vector from the service's response
+     *
+     * @return list<float> The same vector
      *
      * @throws RuntimeException When $embedding isn't a vector of the configured length
      */
@@ -264,11 +288,17 @@ class ProviderEmbedder
     /**
      * Quill HTML (already limited to p/br/strong/em/u/ol/li by RichText) to
      * plain text: one line per paragraph, "- " per list item.
+     *
+     * @param string|null $html Cleaned rich text
+     *
+     * @return string Lines joined by "\n", each trimmed with whitespace collapsed; empty lines dropped
      */
     private static function plainText(?string $html): string
     {
+        // <li> -> "- ", and every line-ending tag -> a newline, before the tags are stripped.
         $html  = preg_replace(['#<li\b[^>]*>#i', '#<br\s*/?>|</(?:p|li)>#i'], ['- ', "\n"], (string) $html);
         $text  = html_entity_decode(strip_tags((string) $html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        // Collapse runs of whitespace, including non-breaking spaces, within each line.
         $lines = array_map(static fn (string $line): string => trim((string) preg_replace('/[\s\x{00A0}]+/u', ' ', $line)), explode("\n", $text));
 
         return implode("\n", array_filter($lines, static fn (string $line): bool => $line !== '' && $line !== '-'));

@@ -146,6 +146,9 @@ class Toolbar extends BaseConfig
         'X-Up-Version'     => null,             // Unpoly partial requests
     ];
 
+    /**
+     * The framework's defaults, minus Shield's Auth collector.
+     */
     public function __construct()
     {
         parent::__construct();
