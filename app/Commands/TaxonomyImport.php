@@ -22,6 +22,13 @@ class TaxonomyImport extends BaseCommand
     protected $usage       = 'taxonomy:import <file> [file ...]';
     protected $arguments   = ['file' => 'Taxonomy files or tagged record files (providers.json, hirers.json)'];
 
+    /**
+     * `php spark taxonomy:import <file> [file ...]`
+     *
+     * @param list<string> $params Paths of taxonomy files or tagged record files
+     *
+     * @return int EXIT_SUCCESS, or EXIT_USER_INPUT (no files, unreadable JSON, wrong taxonomy version, no taxonomy found)
+     */
     public function run(array $params)
     {
         $files = $params;
@@ -41,6 +48,8 @@ class TaxonomyImport extends BaseCommand
                 return EXIT_USER_INPUT;
             }
 
+            // A taxonomy file is one tree; a records file has one tree per record (its `tags`).
+            // Merge them all: sets keyed by name, so repeats count once.
             $version = $data['taxonomy_version'] ?? null;
             $trees   = isset($data['categories']) ? [$data] : array_column($data, 'tags');
             foreach ($trees as $tags) {
@@ -62,6 +71,7 @@ class TaxonomyImport extends BaseCommand
             }
         }
 
+        // The merged sets -> Taxonomy::import()'s input, everything sorted by name.
         ksort($tree);
         $categories = [];
         foreach ($tree as $name => $category) {

@@ -40,11 +40,22 @@ final class RequestTimer
      */
     private static array $spans = [];
 
+    /**
+     * On for web requests when Config\RequestTimer::$enabled (development by
+     * default); spark commands are never timed.
+     *
+     * @return bool Whether Config\Events should register the listeners
+     */
     public static function enabled(): bool
     {
         return ! is_cli() && config(RequestTimerConfig::class)->enabled;
     }
 
+    /**
+     * DBQuery event listener: records each query's SQL and duration.
+     *
+     * @param Query $query The query CodeIgniter just ran
+     */
     public static function query(Query $query): void
     {
         self::$queries[] = ['sql' => $query->getQuery(), 'ms' => (float) $query->getDuration(6) * 1000];
@@ -55,9 +66,10 @@ final class RequestTimer
      *
      * @template T
      *
-     * @param callable(): T $fn
+     * @param string        $name The line it is reported on, e.g. "matcher"
+     * @param callable(): T $fn   The work to time
      *
-     * @return T
+     * @return T Whatever $fn returns
      */
     public static function span(string $name, callable $fn): mixed
     {
@@ -75,6 +87,9 @@ final class RequestTimer
      * two (or more) requests. A redirect leaves its start time in the session;
      * the request that finally renders a page reports the time since then.
      *
+     * @param string $request This request, e.g. "GET /gigs/17/matches"
+     * @param int    $status  Its HTTP status
+     *
      * @return array{float, string}|null [ms, "POST /a -> GET /b"], or null when this request isn't the end of a redirect
      */
     private static function action(string $request, int $status): ?array
@@ -88,6 +103,7 @@ final class RequestTimer
         unset($_SESSION[self::SESSION_KEY]);
         $chain = [...($started['chain'] ?? []), $request];
 
+        // A redirect: carry the chain's start time on to the next request.
         if ($status >= 300 && $status < 400) {
             $_SESSION[self::SESSION_KEY] = ['start' => $started['start'] ?? $_SERVER['REQUEST_TIME_FLOAT'], 'chain' => $chain];
 
@@ -106,6 +122,11 @@ final class RequestTimer
         register_shutdown_function([self::class, 'report']);
     }
 
+    /**
+     * Writes this request's timing report to stderr (the `php spark serve`
+     * console), plus the whole action's total when it ends a redirect chain.
+     * Runs at shutdown, after the response is sent.
+     */
     public static function report(): void
     {
         $request = service('request');
@@ -115,6 +136,7 @@ final class RequestTimer
             return;
         }
 
+        // Time since PHP received the request; connect time only if the database was used.
         $config  = config(RequestTimerConfig::class);
         $total   = (microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000;
         $connect = self::$queries === [] ? 0.0 : (float) Database::connect()->getConnectDuration(6) * 1000;
@@ -138,6 +160,7 @@ final class RequestTimer
             $lines[] = sprintf('  %-14s %6.0f ms', $name, $ms);
         }
 
+        // Whatever isn't the database or a named span: PHP, framework and views.
         $lines[] = sprintf('  %-14s %6.0f ms  everything else', 'php + views', max(0.0, $total - $connect - $queryMs - array_sum(self::$spans)));
         $lines[] = sprintf('  %-14s %6.0f ms', 'total', $total);
 

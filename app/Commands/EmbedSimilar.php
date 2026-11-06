@@ -19,6 +19,14 @@ class EmbedSimilar extends BaseCommand
     protected $arguments   = ['showcase_id' => 'A showcases.id that has been embedded (php spark embed:batch showcases)'];
     protected $options     = ['--limit' => 'How many neighbours to list (default 10)'];
 
+    /**
+     * `php spark embed:similar <showcase_id> [--limit 10]`: prints a table of the
+     * nearest showcases by cosine distance (the showcase itself comes first, at 0).
+     *
+     * @param list<string> $params Positional arguments: the showcase id
+     *
+     * @return int EXIT_SUCCESS, or EXIT_USER_INPUT when the showcase has no vector
+     */
     public function run(array $params)
     {
         $id     = (int) ($params[0] ?? 0);
@@ -31,6 +39,7 @@ class EmbedSimilar extends BaseCommand
         }
 
         $nearest = $store->nearest($vector, max(1, (int) (CLI::getOption('limit') ?? 10)));
+        // One query for the neighbours' titles, for the table.
         $titles  = array_column(
             db_connect()->table('showcases')->select('id, title')->whereIn('id', array_column($nearest, 'id'))->get()->getResultArray(),
             'title',

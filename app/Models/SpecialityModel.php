@@ -4,6 +4,10 @@ namespace App\Models;
 
 use CodeIgniter\Model;
 
+/**
+ * The client's legacy `specialities` (under `categories`). Unused since the
+ * switch to the SkillsFuture taxonomy; kept until the legacy tables are dropped.
+ */
 class SpecialityModel extends Model
 {
     protected $table         = 'specialities';
@@ -16,6 +20,8 @@ class SpecialityModel extends Model
 
     /**
      * Active rows grouped by parent category: [category_id => [id => name]].
+     *
+     * @return array<int, array<int, string>>
      */
     public function activeByCategory(): array
     {
@@ -29,6 +35,8 @@ class SpecialityModel extends Model
 
     /**
      * Active rows as [speciality id => its category id].
+     *
+     * @return array<int, int>
      */
     public function activeCategoryMap(): array
     {
@@ -43,7 +51,9 @@ class SpecialityModel extends Model
      * Search tags for the given specialities: "Specialisation (Category)",
      * e.g. "Investor Reporting (Asset/Wealth Management)".
      *
-     * @return list<string>
+     * @param list<int|string> $ids Speciality ids
+     *
+     * @return list<string> Sorted by category, then speciality
      */
     public function searchTags(array $ids): array
     {
@@ -63,6 +73,8 @@ class SpecialityModel extends Model
 
     /**
      * Active rows as [id => name], for forms that submit ids.
+     *
+     * @return array<int, string> Sorted by name
      */
     public function activeOptions(): array
     {

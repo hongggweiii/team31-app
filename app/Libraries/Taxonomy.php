@@ -29,6 +29,10 @@ final class Taxonomy
 
     private BaseConnection $db;
 
+    /**
+     * @param BaseConnection|null $db Defaults to the app's database; models pass theirs so
+     *                                save() runs inside their transaction
+     */
     public function __construct(?BaseConnection $db = null)
     {
         $this->db = $db ?? db_connect();
@@ -36,6 +40,11 @@ final class Taxonomy
 
     /**
      * "<specialisation> (<category>)", the platform's search tag.
+     *
+     * @param string $specialisation e.g. "Tax"
+     * @param string $category       e.g. "Accountancy"
+     *
+     * @return string e.g. "Tax (Accountancy)"
      */
     public static function searchTag(string $specialisation, string $category): string
     {
@@ -44,7 +53,7 @@ final class Taxonomy
 
     /**
      * The whole taxonomy for the picker, categories and specialisations by
-     * name.
+     * name. Three queries; use cachedTree() on hot paths.
      *
      * @return list<array{id: int, name: string, group: string|null, specialisations: list<array{id: int, name: string, search_tag: string, skills: array<int, string>}>}>
      */
@@ -62,6 +71,8 @@ final class Taxonomy
             $skills[(int) $row['specialisation_id']][(int) $row['id']] = $row['name'];
         }
 
+        // Hang each specialisation (with its skills) under its category. $category is a
+        // reference into $categories, unset after each use so the next row can't overwrite it.
         foreach ($this->db->table('sf_specialisations')->select('id, category_id, name')->orderBy('name')->get()->getResultArray() as $row) {
             $category = &$categories[(int) $row['category_id']];
             $category['specialisations'][] = [
@@ -90,6 +101,9 @@ final class Taxonomy
         return cache()->remember($this->treeCacheKey(), self::TREE_CACHE_SECONDS, fn (): array => $this->tree());
     }
 
+    /**
+     * Drops the cached tree; the next cachedTree() rebuilds it.
+     */
     public function forgetTree(): void
     {
         cache()->delete($this->treeCacheKey());
@@ -99,6 +113,8 @@ final class Taxonomy
      * One entry per database, so the test database never shares the app's.
      * Bump TREE_CACHE_VERSION whenever tree()'s shape changes, so an entry
      * cached in the old shape is never read.
+     *
+     * @return string e.g. "taxonomy_tree_v2_<md5 of host/database>"
      */
     private function treeCacheKey(): string
     {
@@ -118,6 +134,7 @@ final class Taxonomy
      */
     public function check(mixed $categories, mixed $specialisations, mixed $skills): array
     {
+        // Posted values -> unique integer ids; anything that isn't a whole number is dropped.
         $ids = static fn (mixed $values): array => array_values(array_unique(array_map('intval', array_filter(
             (array) $values,
             static fn ($v): bool => is_scalar($v) && ctype_digit((string) $v),
@@ -147,6 +164,7 @@ final class Taxonomy
             $errors['categories'] = 'Choose categories from the list.';
         }
 
+        // Specialisations: all known, all under a chosen category, and 1-3 per category.
         $parents = array_intersect_key($parentOf, array_flip($specialisations));
         if ($specialisations === []) {
             $errors['specialisations'] = 'Choose at least one specialisation.';
@@ -165,6 +183,8 @@ final class Taxonomy
             }
         }
 
+        // Skills: only those under a chosen specialisation count; at most 8 each,
+        // and each must be linked to its specialisation in sf_specialisation_skills.
         $chosenSkills = [];
         foreach ((array) $skills as $specialisation => $skillIds) {
             if (in_array((int) $specialisation, $specialisations, true) && ($skillIds = $ids($skillIds)) !== []) {
@@ -186,7 +206,11 @@ final class Taxonomy
      * Stores a check()ed selection for a new gig / showcase. Run it inside the
      * caller's transaction.
      *
-     * @param array{specialisations: list<int>, skills: array<int, list<int>>} $selection
+     * @param string                                                          $owner     'gig' or 'showcase'
+     * @param int                                                             $ownerId   The new gig / showcase id
+     * @param array{specialisations: list<int>, skills: array<int, list<int>>} $selection From check()
+     *
+     * @throws \InvalidArgumentException For an unknown $owner
      */
     public function save(string $owner, int $ownerId, array $selection): void
     {
@@ -215,7 +239,8 @@ final class Taxonomy
      * matcher request's `taxonomy`: categories, specialisations and skills
      * sorted by name.
      *
-     * @param list<int> $ownerIds
+     * @param string    $owner    'gig' or 'showcase'
+     * @param list<int> $ownerIds Gig / showcase ids (two queries for the whole list)
      *
      * @return array<int, list<array{name: string, group: string|null, specialisations: list<array{name: string, search_tag: string, skills: list<string>}>}>>
      *         Keyed by owner id; owners without tags are left out
@@ -234,6 +259,8 @@ final class Taxonomy
             $skills[(int) $row['owner']][(int) $row['specialisation_id']][] = $row['name'];
         }
 
+        // Group by owner, then category name, then specialisation name; the keys
+        // are sorted below, so the result is in name order.
         $tree = [];
         $rows = $this->db->table("{$owner}_specialisations l")
             ->select("l.{$owner}_id AS owner, s.id, s.name, c.name AS category, c.group_name")
@@ -265,9 +292,10 @@ final class Taxonomy
 
     /**
      * What tags() returns for an owner with this check()ed selection, built
-     * from the cached tree instead of read back from the database.
+     * from the cached tree instead of read back from the database. Used by
+     * Gigs::create() to hand the new gig's tags to the matches page.
      *
-     * @param array{specialisations: list<int>, skills: array<int, list<int>>} $selection
+     * @param array{specialisations: list<int>, skills: array<int, list<int>>} $selection From check()
      *
      * @return list<array{name: string, group: string|null, specialisations: list<array{name: string, search_tag: string, skills: list<string>}>}>
      */
@@ -317,6 +345,8 @@ final class Taxonomy
 
         $this->db->transException(true)->transStart();
 
+        // What exists already, by name (specialisations by category + name, links by
+        // both ids), so each row below is inserted only if it is new.
         $categoryIds = array_column($this->db->table('sf_categories')->select('id, name')->get()->getResultArray(), 'id', 'name');
         $skillIds    = array_column($this->db->table('sf_skills')->select('id, name')->get()->getResultArray(), 'id', 'name');
         $specIds     = [];
@@ -587,6 +617,9 @@ final class Taxonomy
         }
     }
 
+    /**
+     * @throws \InvalidArgumentException Unless $owner is 'gig' or 'showcase' (it becomes part of table names)
+     */
     private function assertOwner(string $owner): void
     {
         if (! in_array($owner, self::OWNERS, true)) {

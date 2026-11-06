@@ -39,7 +39,7 @@ log = logging.getLogger("uvicorn.error")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Loads the embedding model when the service starts, so the first request doesn't have to
-    wait for it."""
+    wait for it. It also logs which device the model landed on."""
     model = _get_model()  # load once at startup so the first request doesn't pay for it
     log.info("embedding model %s loaded on %s (EMBED_DEVICE=%s)", BASE_MODEL_NAME, model.device,
              os.environ.get("EMBED_DEVICE") or "unset, picked automatically")
@@ -65,7 +65,11 @@ class Provider(BaseModel):
 @app.get("/health")
 def health():
     """Reports that the service is running, plus the model name, the vector size and the device
-    the model runs on (mps, cuda or cpu)."""
+    the model runs on (mps, cuda or cpu).
+
+    Returns:
+        {"status": "ok", "model", "dimensions", "device"}.
+    """
     return {"status": "ok", "model": BASE_MODEL_NAME, "dimensions": EMBED_DIM, "device": str(_get_model().device)}
 
 
@@ -73,7 +77,17 @@ def health():
 # blocking the event loop.
 @app.post("/embed/provider")
 def embed_provider_route(provider: Provider):
-    """Turns one showcase into a vector. Returns HTTP 422 if all five fields are empty."""
+    """Turns one showcase into a vector. Returns HTTP 422 if all five fields are empty.
+
+    Args:
+        provider: The request body.
+
+    Returns:
+        {"model", "dimensions", "embedding": [float, ...]}.
+
+    Raises:
+        HTTPException: 422 when every field is empty.
+    """
     fields = provider.model_dump()
     if not provider_text(fields).strip():
         raise HTTPException(status_code=422, detail="All provider text fields are empty")
@@ -89,7 +103,18 @@ class ProviderBatch(BaseModel):
 def embed_providers_route(batch: ProviderBatch):
     """Turns many showcases into vectors in one request; the vectors come back in the same order.
     The matcher also uses this to embed skill names. Returns HTTP 422 if the list is empty,
-    longer than MAX_BATCH, or has a showcase with no text."""
+    longer than MAX_BATCH, or has a showcase with no text.
+
+    Args:
+        batch: {"providers": [Provider, ...]}.
+
+    Returns:
+        {"model", "dimensions", "embeddings": [[float, ...], ...]}, in input order.
+
+    Raises:
+        HTTPException: 422 for 0 or more than MAX_BATCH providers, or any provider with no text
+            (the detail names their indexes).
+    """
     if not 1 <= len(batch.providers) <= MAX_BATCH:
         raise HTTPException(status_code=422, detail=f"Send between 1 and {MAX_BATCH} providers")
     fields = [p.model_dump() for p in batch.providers]
@@ -117,7 +142,17 @@ class GigBatch(BaseModel):
 def embed_gigs_route(batch: GigBatch):
     """Turns gigs into vectors, returned in the same order. The matcher calls this once for every
     match request. Returns HTTP 422 if the list is empty, longer than MAX_BATCH, or has a gig
-    with no text."""
+    with no text. Gigs get the query prefix; showcases don't.
+
+    Args:
+        batch: {"gigs": [Gig, ...]}.
+
+    Returns:
+        {"model", "dimensions", "embeddings": [[float, ...], ...]}, in input order.
+
+    Raises:
+        HTTPException: 422 for 0 or more than MAX_BATCH gigs, or any gig with no text.
+    """
     if not 1 <= len(batch.gigs) <= MAX_BATCH:
         raise HTTPException(status_code=422, detail=f"Send between 1 and {MAX_BATCH} gigs")
     fields = [g.model_dump() for g in batch.gigs]

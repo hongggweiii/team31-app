@@ -21,6 +21,10 @@ class MatcherClient
     private Matcher $config;
     private CURLRequest $client;
 
+    /**
+     * @param Matcher|null     $config Defaults to Config\Matcher (URL, 5 s timeout, top_k)
+     * @param CURLRequest|null $client Defaults to a client for matcher/; tests pass a mock
+     */
     public function __construct(?Matcher $config = null, ?CURLRequest $client = null)
     {
         $this->config = $config ?? config(Matcher::class);
@@ -36,8 +40,9 @@ class MatcherClient
      *
      * @param array<string, mixed> $gig      gigs row
      * @param list<array>          $taxonomy GigModel::rankerTaxonomy()
+     * @param int|null             $topK     Results wanted; defaults to Config\Matcher::$topK (10)
      *
-     * @return array<string, mixed>
+     * @return array<string, mixed> The /match request body
      */
     public static function gigRequest(array $gig, array $taxonomy, ?int $topK = null): array
     {
@@ -52,9 +57,11 @@ class MatcherClient
     }
 
     /**
+     * POSTs the request to matcher/ /match and classifies every failure.
+     *
      * @param array<string, mixed> $request gigRequest()
      *
-     * @return array<string, mixed> The decoded response; results that lack the fields the page shows are dropped
+     * @return array<string, mixed> The decoded response ({results, meta}); results that lack the fields the page shows are dropped
      *
      * @throws MatcherException Why matching failed: unreachable, timed out, refused, or an unusable answer
      *                          (the exception code is the HTTP status, 0 when matcher/ never answered)
@@ -88,6 +95,7 @@ class MatcherClient
             throw new MatcherException(MatcherException::BAD_RESPONSE, 'Matcher returned no results: ' . $body, $status);
         }
 
+        // Drop malformed items rather than fail the whole page on one.
         $data['results'] = array_values(array_filter($data['results'], self::usable(...)));
 
         return $data;
@@ -96,6 +104,8 @@ class MatcherClient
     /**
      * A result the matches page can show: the ranker's contract guarantees these,
      * so anything else is skipped rather than allowed to break the page.
+     *
+     * @param mixed $result One item of the response's results
      */
     private static function usable(mixed $result): bool
     {
