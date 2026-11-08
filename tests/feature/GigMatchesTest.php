@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Libraries\MatcherClient;
+use App\Libraries\MatcherException;
 use App\Models\GigModel;
 use CodeIgniter\Exceptions\PageNotFoundException;
 use CodeIgniter\Shield\Entities\User;
@@ -139,7 +140,18 @@ final class GigMatchesTest extends CIUnitTestCase
 
     public function testSaysSoWhenMatchingIsUnavailable(): void
     {
-        $this->matcher->answer = new RuntimeException('Matcher returned HTTP 503: embedding-service unavailable', 503);
+        $this->matcher->answer = new MatcherException(MatcherException::UNAVAILABLE, 'Matcher returned HTTP 503: embedding-service unavailable', 503);
+
+        $result = $this->actingAs($this->owner)->get("gigs/{$this->gigId}/matches");
+
+        $result->assertOK();
+        $result->assertSee('Matching is unavailable right now. Your gig is saved');
+        $result->assertSee('Try again');
+    }
+
+    public function testAnyOtherMatchingFailureIsTreatedAsUnavailable(): void
+    {
+        $this->matcher->answer = new RuntimeException('Something unexpected');
 
         $result = $this->actingAs($this->owner)->get("gigs/{$this->gigId}/matches");
 
@@ -172,6 +184,48 @@ final class GigMatchesTest extends CIUnitTestCase
         $this->seeInDatabase('analytics_outputs', ['gig_id' => $this->gigId, 'status' => 'error',
             'error' => 'Matcher returned HTTP 503: embedding-service unavailable']);
         $this->seeNumRecords(0, 'run_outputs', []);
+    public function testAnUnusableAnswerAsksToRetry(): void
+    {
+        $this->matcher->answer = new MatcherException(MatcherException::BAD_RESPONSE, 'Matcher returned no results: <html>');
+
+        $result = $this->actingAs($this->owner)->get("gigs/{$this->gigId}/matches");
+
+        $result->assertOK();
+        $result->assertSee('Something went wrong while finding matches');
+        $result->assertSee('Try again');
+    }
+
+    public function testARejectedGigOffersNoRetry(): void
+    {
+        $this->matcher->answer = new MatcherException(MatcherException::REJECTED, 'Matcher returned HTTP 422', 422);
+
+        $result = $this->actingAs($this->owner)->get("gigs/{$this->gigId}/matches");
+
+        $result->assertOK();
+        $result->assertSee('find matches for this gig because its title and description are empty');
+        $result->assertDontSee('Try again');
+    }
+
+    public function testSaysSoWhenThereAreNoShowcasesYet(): void
+    {
+        $this->matcher->answer = ['results' => [], 'meta' => ['catalogue_size' => 0, 'returned' => 0]];
+
+        $result = $this->actingAs($this->owner)->get("gigs/{$this->gigId}/matches");
+
+        $result->assertOK();
+        $result->assertSee('No providers have published a showcase yet');
+        $result->assertDontSee('relevant to this gig');
+    }
+
+    public function testTellsNoRelevantExpertsApartFromNoShowcases(): void
+    {
+        $this->matcher->answer = ['results' => [], 'meta' => ['catalogue_size' => 3035, 'returned' => 0]];
+
+        $result = $this->actingAs($this->owner)->get("gigs/{$this->gigId}/matches");
+
+        $result->assertOK();
+        $result->assertSee('find experts relevant to this gig');
+        $result->assertDontSee('No providers have published a showcase yet');
     }
 
     public function testOtherUsersCannotSeeAGigsMatches(): void

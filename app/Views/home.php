@@ -50,7 +50,6 @@ $faqs = [
             Find an Expert
           </a>
           <a href="<?= base_url('create-gig') ?>" class="rounded-full border-2 border-navy px-7 py-3.5 text-sm font-semibold text-navy hover:bg-navy hover:text-white transition-colors">
-          <a href="#" class="rounded-full border-2 border-navy px-7 py-3.5 text-sm font-semibold text-navy hover:bg-navy hover:text-white transition-colors">
             Post a Job
           </a>
         </div>

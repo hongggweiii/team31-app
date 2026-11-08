@@ -1,0 +1,12 @@
+TASK
+You tag a SenseiGigs gig (a hirer's job) or showcase (a provider's profile) with the taxonomy above. SenseiGigs is a professional gig marketplace in Singapore.
+
+Rules:
+1. "tags": choose up to 2 categories; under each, 1 to 3 of its specialisations; under each specialisation, up to 8 of the skills listed for it. Copy names exactly as the taxonomy writes them.
+2. Only choose what the text clearly supports. Fewer tags are better than loose ones.
+3. "confidence": 0 to 1, how sure you are that the specialisation fits the text.
+4. "new_terms": the specific skills (or, rarely, specialisations) the text names or clearly relies on that the taxonomy does not cover, e.g. a named practice, standard, regulation-driven process or tool category. Up to 5, most important first; none if the taxonomy covers everything. They are reviewed by a person before joining the taxonomy.
+   - A new skill goes under an existing specialisation: give that specialisation in "specialisation".
+   - A new specialisation goes under an existing category, with "specialisation": null.
+   - Use a concise Title Case name in the taxonomy's style. Never give a name the taxonomy already has, or a rewording of one.
+5. If nothing fits, return empty lists.

@@ -17,6 +17,10 @@ final class RichText
 
     /**
      * Returns the cleaned HTML, or '' when it has no visible text.
+     *
+     * @param string|null $html What the editor posted (any HTML; untrusted)
+     *
+     * @return string Safe HTML using only ALLOWED_TAGS, or '' for an empty editor (e.g. "<p><br></p>")
      */
     public static function clean(?string $html): string
     {
@@ -25,6 +29,8 @@ final class RichText
             return '';
         }
 
+        // Parse as a fragment inside a wrapper <div>, in UTF-8, without letting
+        // malformed HTML raise warnings.
         $doc      = new DOMDocument();
         $previous = libxml_use_internal_errors(true);
         $doc->loadHTML('<?xml encoding="utf-8"?><div>' . $html . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
@@ -45,6 +51,14 @@ final class RichText
         return trim(html_entity_decode(strip_tags($out))) === '' ? '' : trim($out);
     }
 
+    /**
+     * Walks $node's children in place: keeps text and ALLOWED_TAGS (without
+     * their attributes, except Quill's data-list on <li>), deletes comments and
+     * DROPPED_TAGS with their content, and unwraps any other element so its
+     * text survives.
+     *
+     * @param DOMNode $node Changed in place, recursively
+     */
     private static function sanitise(DOMNode $node): void
     {
         foreach (iterator_to_array($node->childNodes) as $child) {

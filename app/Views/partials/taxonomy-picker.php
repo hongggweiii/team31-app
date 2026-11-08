@@ -8,6 +8,11 @@
  * closure. Posts categories[], specialisations[] and skills[<specialisation
  * id>][]. Search tags ("Specialisation (Category)") are only displayed. The
  * caps (Taxonomy::MAX_*) are enforced here and again by Taxonomy::check().
+ *
+ * With $suggestType ('gig' or 'showcase') set, "Suggest tags with AI" posts the
+ * form as filled in so far to TagSuggestions: it ticks the taxonomy's tags and
+ * lists the terms the taxonomy lacks as pending review, posting their ids as
+ * proposals[] so create() links them to the saved gig / showcase.
  */
 use App\Libraries\Taxonomy;
 
@@ -21,7 +26,27 @@ $searchCls   = 'w-full border-0 border-y border-navy/10 px-6 py-3 text-sm placeh
 $capCls      = 'text-xs font-normal text-ink/50';
 ?>
 <div class="js-taxonomy space-y-6" data-max-categories="<?= Taxonomy::MAX_CATEGORIES ?>"
-     data-max-specs="<?= Taxonomy::MAX_SPECIALISATIONS ?>" data-max-skills="<?= Taxonomy::MAX_SKILLS ?>">
+     data-max-specs="<?= Taxonomy::MAX_SPECIALISATIONS ?>" data-max-skills="<?= Taxonomy::MAX_SKILLS ?>"
+     data-suggest-type="<?= esc($suggestType ?? '', 'attr') ?>" data-suggest-url="<?= url_to('tag-suggestions') ?>">
+  <?php if (isset($suggestType)): ?>
+    <section class="js-suggest rounded-card border border-dashed border-brand/50 bg-cream-25 px-6 py-5">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 class="<?= $sectionCls ?>">Not sure what to choose?</h2>
+          <p class="<?= $hintCls ?>">AI ticks matching tags below from what you have written above, and suggests new ones our list doesn't have yet (marked <span class="rounded-full bg-brand/15 px-1.5 text-[10px] font-bold uppercase text-brand">AI</span>).</p>
+        </div>
+        <button type="button" class="js-suggest-btn shrink-0 rounded-full bg-navy px-5 py-2.5 text-sm font-semibold text-white hover:bg-navy-dark transition-colors disabled:opacity-60">
+          Suggest tags with AI
+        </button>
+      </div>
+      <p class="js-suggest-status mt-3 hidden text-sm text-ink/70" role="status"></p>
+      <div class="js-suggest-pending mt-4 hidden">
+        <p class="text-xs font-bold uppercase tracking-wide text-ink/50">Not in our list yet: sent for review</p>
+        <p class="<?= $hintCls ?> !mt-1">An admin will review these. Once approved, they are added to your tags.</p>
+        <div class="js-suggest-chips mt-2 flex flex-wrap gap-2"></div>
+      </div>
+    </section>
+  <?php endif; ?>
   <div class="grid gap-6 sm:grid-cols-2">
     <section class="<?= $listCardCls ?>">
       <h2 class="px-6 pt-5 pb-3 <?= $sectionCls ?>">Category <?= $req ?>
@@ -127,7 +152,6 @@ document.querySelectorAll('.js-taxonomy').forEach(function (root) {
     var full = checked(boxes).length >= max;
     boxes.forEach(function (b) { b.disabled = full && !b.checked; });
   }
-
   function filterCategories() {
     root.querySelectorAll('.js-cat-row').forEach(function (row) { show(row, matches(row, catSearch.value)); });
   }
@@ -197,6 +221,67 @@ document.querySelectorAll('.js-taxonomy').forEach(function (root) {
     });
   });
   sync();
+
+  // "Suggest tags with AI": ticks the suggested tags (categories first, so
+  // sync() lists their specialisations, then those, then their skills) and
+  // lists the terms the taxonomy lacks, which the save links via proposals[].
+  var suggestBtn = root.querySelector('.js-suggest-btn');
+  if (suggestBtn) {
+    var form       = root.closest('form');
+    var status     = root.querySelector('.js-suggest-status');
+    var pendingBox = root.querySelector('.js-suggest-pending');
+    var chips      = root.querySelector('.js-suggest-chips');
+    var say = function (text) { status.textContent = text; show(status, text !== ''); };
+    var tick = function (box) { if (box && !box.disabled) box.checked = true; };
+
+    suggestBtn.addEventListener('click', function () {
+      var data = new FormData(form);
+      Array.from(data.keys()).forEach(function (key) {
+        if (data.get(key) instanceof File) data.delete(key); // no uploads
+      });
+      data.append('type', root.dataset.suggestType);
+      suggestBtn.disabled = true;
+      say('Reading what you have written...');
+
+      fetch(root.dataset.suggestUrl, { method: 'POST', body: data, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+        .then(function (r) { return r.json().then(function (body) { return { ok: r.ok, body: body }; }); })
+        .then(function (res) {
+          var body = res.body;
+          if (body.csrf) { // the token changes after every POST: the form must send the new one
+            form.querySelectorAll('input[name="' + body.csrf.name + '"]').forEach(function (i) { i.value = body.csrf.hash; });
+          }
+          if (!res.ok) throw new Error(body.error || 'Suggestions are unavailable right now.');
+
+          var specs = 0;
+          body.tags.forEach(function (c) { tick(root.querySelector('.js-cat[value="' + c.id + '"]')); });
+          sync();
+          body.tags.forEach(function (c) { c.specialisations.forEach(function (s) { tick(root.querySelector('.js-spec[value="' + s.id + '"]')); specs++; }); });
+          sync();
+          body.tags.forEach(function (c) { c.specialisations.forEach(function (s) {
+            s.skills.forEach(function (k) { tick(root.querySelector('input[name="skills[' + s.id + '][]"][value="' + k.id + '"]')); });
+          }); });
+          sync();
+
+          chips.innerHTML = '';
+          body.pending.forEach(function (p) {
+            var chip = document.createElement('span');
+            chip.className = 'inline-flex items-center gap-1.5 rounded-full border border-dashed border-brand/60 bg-white px-3 py-1.5 text-xs text-navy';
+            chip.insertAdjacentHTML('afterbegin', '<span class="rounded-full bg-brand/15 px-1.5 text-[10px] font-bold uppercase text-brand" title="Suggested by AI">AI</span>');
+            chip.appendChild(document.createTextNode(p.name));
+            chip.insertAdjacentHTML('beforeend', '<span class="text-ink/50">&middot; pending review</span>');
+            var input = document.createElement('input');
+            input.type = 'hidden'; input.name = 'proposals[]'; input.value = p.id;
+            chip.appendChild(input);
+            chips.appendChild(chip);
+          });
+          show(pendingBox, body.pending.length > 0);
+          say(specs > 0 ? 'Ticked ' + specs + ' specialisation(s) below. Untick any that don\'t fit before you submit.'
+                        : 'Nothing in our list fits yet. Please choose your tags below.');
+        })
+        .catch(function (e) { say(e.message + ' You can still choose your tags below.'); })
+        .then(function () { suggestBtn.disabled = false; });
+    });
+  }
 
   // Checkbox groups can't be `required`, so check on submit: every ticked
   // category needs at least one of its specialisations.

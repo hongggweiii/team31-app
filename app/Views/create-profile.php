@@ -81,6 +81,7 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
 </div>
 
 <form id="profile_form" action="<?= url_to('showcase-create') ?>" method="post" enctype="multipart/form-data"
+      data-loading="Publishing your showcase…"
       class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-12 space-y-8">
   <?= csrf_field() ?>
 
@@ -178,9 +179,6 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
       </div>
     </div>
   </section>
-
-  <!-- ── category, specialisations, search tags ─────── -->
-  <?php require __DIR__ . '/partials/taxonomy-picker.php'; ?>
 
   <!-- ── availability and rate ──────────────────────── -->
   <section class="<?= $cardCls ?>">
@@ -301,6 +299,10 @@ $chipBoxCls  = 'js-chip-box flex flex-wrap items-center gap-2 rounded-full borde
       <?php endforeach; ?>
     </ul>
   </section>
+
+  <!-- ── category, specialisations, search tags ─────── -->
+  <!-- Last, so "Suggest tags with AI" reads everything above. -->
+  <?php $suggestType = 'showcase'; require __DIR__ . '/partials/taxonomy-picker.php'; ?>
 
   <!-- ── submit ─────────────────────────────────────── -->
   <div class="<?= $cardCls ?>">

@@ -15,6 +15,11 @@ after changing embedding-service/.
                  runs, vs its response: identical JSON structure, the same providers
                  in the same order, scores and margins within float16 noise.
 
+Everything it compares against comes from a ranker checkout: 
+pipeline/data/data_set_v5_tax/{providers,hirers}.json,
+pipeline/features_data/data_set_v5_tax/{candidates_top50,tag_features}.csv,
+pipeline/results_data/data_set_v5_tax/v5tax_tags.json and example_io.json.
+
 Usage (from matcher/, with a checkout of harvestingmoon/ranker):
     .venv/bin/python check_parity.py --ranker ../../ranker [--n 25] [--service http://localhost:8001]
 The first run embeds the ranker's 3,024 providers (a few minutes) into cache/.
@@ -41,11 +46,16 @@ CACHE = app.HERE / "cache"
 
 
 def post(url: str, body: dict) -> dict:
+    """Sends a JSON request and returns the JSON reply. There is no time limit, because embedding
+    thousands of records can take minutes."""
     req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
     return json.load(urllib.request.urlopen(req))
 
 
 def check_embeddings(service: str, providers: list, hirers: list, n: int) -> bool:
+    """Check 1: asks the embedding service to embed the first n providers and gigs, embeds the
+    same records with the ranker's own code, and passes only if the two sets of vectors are
+    exactly equal."""
     ok = True
     for side, path, key, fields, records, reference in (
         ("showcases", "embed/providers", "providers", PROVIDER_FIELDS, providers[:n],
@@ -64,6 +74,8 @@ def check_embeddings(service: str, providers: list, hirers: list, n: int) -> boo
 
 
 def cached(name: str, build):
+    """Returns the array saved in cache/<name>. If it isn't there yet, it is made by calling
+    build() and saved for next time."""
     CACHE.mkdir(exist_ok=True)
     path = CACHE / name
     if not path.exists():
@@ -72,6 +84,8 @@ def cached(name: str, build):
 
 
 def catalogue(providers: list, hirers: list) -> app.Catalogue:
+    """Builds the matcher's catalogue from the ranker's own providers, with vectors made by the
+    ranker's own code (saved in cache/ after the first run)."""
     skills = sorted({k for r in hirers + providers for k in tag_axes(r)[2]})
     raw = cached("v5tax_providers.npy", lambda: encode_docs([provider_text(p) for p in providers]))
     return app.Catalogue(providers, _truncate_and_normalize(raw, app.DENSE_DIM),
@@ -84,6 +98,10 @@ def gig_unit(gigs: list) -> np.ndarray:
 
 
 def check_matching(ranker: Path, cat: app.Catalogue, hirers: list, n: int) -> bool:
+    """Check 2: runs the matcher on the first n gigs of the ranker's data and compares the result
+    with the ranker's saved results. Passes when the matcher picks almost the same 50
+    candidate showcases, computes the same keyword and tag scores, and ranks nearly the same
+    showcases in the top 10."""
     feats = ranker / "pipeline" / "features_data" / "data_set_v5_tax"
 
     ref = defaultdict(dict)
@@ -138,6 +156,10 @@ def shape(x):
 
 
 def check_contract(ranker: Path, cat: app.Catalogue) -> bool:
+    """Check 3: sends the ranker's example request (example_io.json) through the same code /match
+    uses, and compares the reply with the ranker's example reply. Passes when it has the same
+    fields, the same meta, the same showcases in the same order, and scores that differ only
+    by tiny rounding."""
     example = json.loads((ranker / "example_io.json").read_text())
     req, want = app.MatchRequest(**example["request"]), example["response"]
     gig = {"hire_id": req.hire_id, "hire_title": req.hire_title, "hire_description": req.hire_description,
@@ -159,6 +181,8 @@ def check_contract(ranker: Path, cat: app.Catalogue) -> bool:
 
 
 def main():
+    """Reads the ranker's data and runs the three checks. Prints PASS or FAIL, and exits with 0
+    on pass and 1 on fail."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--ranker", required=True, help="path to a harvestingmoon/ranker checkout")
     ap.add_argument("--n", type=int, default=25, help="gigs (and showcases) to check")

@@ -5,6 +5,10 @@ namespace App\Models;
 use App\Libraries\Taxonomy;
 use CodeIgniter\Model;
 
+/**
+ * Showcases (providers' profiles) and their child tables: credentials,
+ * services, achievements, skill groups, documents, and tags (via Taxonomy).
+ */
 class ShowcaseModel extends Model
 {
     /** "Links" upload categories: key => label. */
@@ -50,6 +54,7 @@ class ShowcaseModel extends Model
     /**
      * Inserts a showcase and all of its child rows in one transaction.
      *
+     * @param array<string, mixed> $showcase showcases columns (user_id, name, headline, about, ...)
      * @param array{
      *     credentials?: list<string>,
      *     taxonomy?: array{specialisations: list<int>, skills: array<int, list<int>>},
@@ -59,7 +64,7 @@ class ShowcaseModel extends Model
      *     documents: list<array{category: string, path: string, original_name: string}>,
      * } $children
      *
-     * @return int|false New showcase id, or false if any insert failed.
+     * @return int|false New showcase id, or false if any insert failed (nothing is kept then)
      */
     public function createWithChildren(array $showcase, array $children): int|false
     {
@@ -68,6 +73,7 @@ class ShowcaseModel extends Model
         $id = $this->insert($showcase);
 
         if ($id !== false) {
+            // Child rows per table; repeatable boxes keep the user's order in sort_order.
             $rows = [
                 'showcase_credentials'  => self::ordered(array_map(static fn (string $c): array => ['description' => $c], $children['credentials'] ?? [])),
                 'showcase_services'     => self::ordered($children['services']),
@@ -78,6 +84,7 @@ class ShowcaseModel extends Model
                 ], $children['skill_groups'])),
                 'showcase_documents' => array_map(static fn (array $d): array => $d + ['created_at' => date('Y-m-d H:i:s')], $children['documents']),
             ];
+            // One multi-row INSERT per table (a round trip each), skipping empty sections.
             foreach ($rows as $table => $tableRows) {
                 if ($tableRows !== []) {
                     $this->db->table($table)->insertBatch(array_map(static fn (array $r): array => ['showcase_id' => $id] + $r, $tableRows));
@@ -93,6 +100,10 @@ class ShowcaseModel extends Model
 
     /**
      * Adds sort_order to repeatable-box rows, in the order given.
+     *
+     * @param list<array<string, mixed>> $rows
+     *
+     * @return list<array<string, mixed>> The rows, each with sort_order 0, 1, 2, ...
      */
     private static function ordered(array $rows): array
     {

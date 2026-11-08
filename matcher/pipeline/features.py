@@ -1,3 +1,6 @@
+# In the ranker: pipeline/features/features.py (same code, except imports and BASE).
+# Used here: not imported. app.py's candidates() builds the same feature rows as this
+# file's per-gig loop.
 """
 Feature builder for Stage-2 re-ranking (cross-encoder + LambdaMART).
 

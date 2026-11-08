@@ -1,0 +1,6 @@
+# Nothing here comes from the ranker's requirements files.
+fastapi>=0.110
+uvicorn>=0.29
+pymysql>=1.1
+openai>=1.40       # structured outputs (response_format json_schema)
+rapidfuzz>=3.0     # Levenshtein similarity, for close spelling matches

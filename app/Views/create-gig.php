@@ -32,6 +32,7 @@ $err = static function (string $field) use ($errors): string {
 </div>
 
 <form action="<?= url_to('gig-create') ?>" method="post"
+      data-loading="Posting your gig and finding matching experts…"
       class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-12 space-y-8">
   <?= csrf_field() ?>
 
@@ -96,7 +97,7 @@ $err = static function (string $field) use ($errors): string {
   </section>
 
   <!-- ── category, specialisations, search tags ─────── -->
-  <?php require __DIR__ . '/partials/taxonomy-picker.php'; ?>
+  <?php $suggestType = 'gig'; require __DIR__ . '/partials/taxonomy-picker.php'; ?>
 
   <!-- ── submit ─────────────────────────────────────── -->
   <div class="<?= $cardCls ?>">

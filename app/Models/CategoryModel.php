@@ -4,6 +4,11 @@ namespace App\Models;
 
 use CodeIgniter\Model;
 
+/**
+ * The client's legacy `categories` (under `services`). Unused since the switch to
+ * the SkillsFuture taxonomy (sf_* tables, App\Libraries\Taxonomy); kept until
+ * the legacy tables are dropped.
+ */
 class CategoryModel extends Model
 {
     protected $table         = 'categories';
@@ -17,6 +22,8 @@ class CategoryModel extends Model
     /**
      * Active rows grouped under their service heading (Industry, Function, ...):
      * [service name => [id => name]], headings in services.id order.
+     *
+     * @return array<string, array<int, string>>
      */
     public function activeByService(): array
     {
@@ -36,6 +43,8 @@ class CategoryModel extends Model
 
     /**
      * Active rows as [id => name], for forms that submit ids.
+     *
+     * @return array<int, string> Sorted by name
      */
     public function activeOptions(): array
     {

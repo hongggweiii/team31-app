@@ -1,3 +1,7 @@
+# In the ranker: pipeline/lightweight/rerank_ltr.py. DEFAULT_FEATURES and SCORE_FEATURES
+# are the same there and normalize_by_query z-scores the same way; the training code differs.
+# Used here: DEFAULT_FEATURES, SCORE_FEATURES and normalize_by_query (app.py). The
+# training code is unused.
 """
 LambdaMART learning-to-rank re-ranker (Stage 2b) for the Senseigigs matching search.
 

@@ -21,6 +21,14 @@ class Showcases extends BaseController
 
     private const MAX_GROUP_NAME_LENGTH = 100;
 
+    /**
+     * The "Create your Profile" form, with the cached SkillsFuture tree and the
+     * per-section limits the form enforces in the browser.
+     *
+     * GET /create-profile
+     *
+     * @return string The rendered create-profile view
+     */
     public function new(): string
     {
         return view('create-profile', [
@@ -30,8 +38,24 @@ class Showcases extends BaseController
         ]);
     }
 
+    /**
+     * Validates and saves a showcase with its children (credentials, tags,
+     * services, achievements, skill groups, documents) in one transaction.
+     * Uploaded files are stored first and deleted again if the save fails.
+     * The showcase is embedded later by `php spark embed:auto` (cron), not here,
+     * so a slow embedding-service never delays the form.
+     *
+     * POST /create-profile (multipart): the profile fields, credentials[],
+     * services[i][title|detail], achievements[], skill_groups[i][name|skills[]],
+     * the picker's categories[] / specialisations[] / skills[<id>][], an optional
+     * photo and documents under links[<category>][].
+     *
+     * @return RedirectResponse Back to the empty form with a 'message' flash; or back
+     *                          with the input and an 'errors' flash (field => message)
+     */
     public function create(): RedirectResponse
     {
+        // Validate what would be saved: trimmed text, cleaned rich text, no empty boxes.
         $data = $this->normalise($this->request->getPost());
 
         $rules = [
@@ -97,6 +121,7 @@ class Showcases extends BaseController
             return redirect()->back()->withInput()->with('errors', $errors);
         }
 
+        // Store the uploads first (paths kept in $stored), so the rows can point at them.
         $stored = [];
         $photo  = isset($rules['photo']) ? $this->request->getFile('photo') : null;
         if ($photo !== null && $photo->isValid() && ! $photo->hasMoved()) {
@@ -119,6 +144,7 @@ class Showcases extends BaseController
             }
         }
 
+        // The showcase row and all its child rows, in one transaction.
         $nullIfBlank = static fn (string $value): ?string => $value !== '' ? $value : null;
 
         $showcases  = new ShowcaseModel();
@@ -149,6 +175,7 @@ class Showcases extends BaseController
         );
 
         if ($showcaseId === false) {
+            // Nothing was saved: remove the files stored above so none are orphaned.
             foreach ($stored as $path) {
                 @unlink(WRITEPATH . 'uploads/' . $path);
             }
@@ -156,6 +183,7 @@ class Showcases extends BaseController
             return redirect()->back()->withInput()
                 ->with('errors', $showcases->errors() ?: ['showcase' => 'Your showcase could not be saved. Please try again.']);
         }
+        $this->attachSuggestedTerms('showcase', $showcaseId);
 
         return redirect()->to(url_to('showcase-new'))->with('message', 'Your showcase has been published.');
     }
@@ -163,6 +191,12 @@ class Showcases extends BaseController
     /**
      * Trims text, cleans rich text, de-duplicates selections and drops empty
      * repeatable boxes, so validation sees what would actually be saved.
+     *
+     * @param array<string, mixed> $post The raw POST data
+     *
+     * @return array<string, mixed> The same keys, cleaned; services as [{title, detail}],
+     *                              achievements and credentials as lists of strings,
+     *                              skill_groups as [{name, skills: list<string>}]
      */
     private function normalise(array $post): array
     {
@@ -203,7 +237,9 @@ class Showcases extends BaseController
     /**
      * Trimmed, non-empty strings, de-duplicated case-insensitively.
      *
-     * @return list<string>
+     * @param array<mixed> $values Anything; non-strings are dropped
+     *
+     * @return list<string> In first-seen order, keeping the first spelling
      */
     private function uniqueStrings(array $values): array
     {
@@ -219,7 +255,10 @@ class Showcases extends BaseController
     }
 
     /**
-     * Whether the user picked at least one file for this input.
+     * Whether the user picked at least one file for this input, so the
+     * upload rules only apply to inputs that were used.
+     *
+     * @param string $name The file input's name, e.g. "photo" or "links.cv"
      */
     private function chosen(string $name): bool
     {

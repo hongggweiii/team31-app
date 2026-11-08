@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Models\GigModel;
 use App\Libraries\MatcherClient;
 use App\Libraries\MatchRecorder;
+use App\Libraries\MatcherException;
 use App\Libraries\Taxonomy;
 use CodeIgniter\Exceptions\PageNotFoundException;
 use CodeIgniter\HTTP\RedirectResponse;
@@ -24,6 +25,14 @@ class Gigs extends BaseController
      */
     private const NEW_GIG_FLASH = 'new_gig';
 
+    /**
+     * The "Post a Job" form, with the SkillsFuture picker built from the
+     * cached taxonomy tree (no taxonomy queries per page load).
+     *
+     * GET /create-gig
+     *
+     * @return string The rendered create-gig view
+     */
     public function new(): string
     {
         return view('create-gig', [
@@ -31,6 +40,19 @@ class Gigs extends BaseController
         ]);
     }
 
+    /**
+     * Saves a posted gig with its tags in one transaction, then redirects to
+     * its matches page. The new gig and its tags travel with the redirect as
+     * flashdata, so matches() can call matcher/ without reading them back
+     * from the (remote) database.
+     *
+     * POST /create-gig. Reads gig_title, gig_summary, duration_weeks_min/max,
+     * additional_notes, and the picker's categories[], specialisations[] and
+     * skills[<specialisation id>][].
+     *
+     * @return RedirectResponse To the gig's matches page; or back to the form with
+     *                          the input and an 'errors' flash (field => message)
+     */
     public function create(): RedirectResponse
     {
         $gigs = new GigModel();
@@ -57,8 +79,8 @@ class Gigs extends BaseController
 
         $data = $this->validator->getValidated();
 
-        // One duration given means a fixed length: schema v2 stores it as both
-        // the minimum and the maximum.
+        // Durations: '' (not given) -> null. One duration given means a fixed
+        // length: schema v2 stores it as both the minimum and the maximum.
         $minWeeks = ($data['duration_weeks_min'] ?? '') !== '' ? (int) $data['duration_weeks_min'] : null;
         $maxWeeks = ($data['duration_weeks_max'] ?? '') !== '' ? (int) $data['duration_weeks_max'] : null;
         $minWeeks ??= $maxWeeks;
@@ -77,12 +99,14 @@ class Gigs extends BaseController
             'duration_weeks_max' => $maxWeeks,
             'additional_notes'   => $notes !== '' ? $notes : null,
         ];
+        // The gig row and its gig_specialisations / gig_skills, in one transaction.
         $gigId = $gigs->createWithTaxonomy($gig, $taxonomy['selection']);
 
         if ($gigId === false) {
             return redirect()->back()->withInput()
                 ->with('errors', $gigs->errors() ?: ['gig' => 'Your gig could not be saved. Please try again.']);
         }
+        $this->attachSuggestedTerms('gig', $gigId);
 
         return redirect()->to(url_to('gig-matches', $gigId))
             ->with('message', 'Your gig has been posted.')
@@ -96,10 +120,20 @@ class Gigs extends BaseController
      * The showcases that best match one of the hirer's gigs. matcher/ embeds the
      * gig live and ranks every published showcase with the ranker's pipeline,
      * within MatcherClient's 5 s timeout; it saves the gig's vector afterwards.
+     *
+     * GET /gigs/{id}/matches. Matching failures never fail the page: the view
+     * gets $matches = null and $error = the MatcherException reason.
+     *
+     * @param int $gigId From the URL
+     *
+     * @return string The rendered gig-matches view
+     *
+     * @throws PageNotFoundException When the gig doesn't exist or belongs to another user
      */
     public function matches(int $gigId): string
     {
         // Straight after create(): the gig and its tags came with the redirect.
+        // Only used when it is this gig (a stale flash from another tab is ignored).
         $new  = session()->getFlashdata(self::NEW_GIG_FLASH);
         $gigs = new GigModel();
         $tags = null;
@@ -111,19 +145,21 @@ class Gigs extends BaseController
         if ($gig === null || (string) $gig['user_id'] !== (string) auth()->id()) {
             throw PageNotFoundException::forPageNotFound();
         }
+        // A refresh or a later visit: read the tags (2 queries) instead.
         $tags ??= $gigs->rankerTaxonomy($gigId);
 
         $matches = null;
-        $error   = null;
+        $error   = null; // a MatcherException reason when matching failed
 
         try {
             $matches = service('matcherClient')->match(MatcherClient::gigRequest($gig, $tags));
         } catch (RuntimeException $e) {
-            $error = $e->getMessage();
-            log_message('error', 'Matching gig {id} failed: {message}', ['id' => $gigId, 'message' => $error]);
+            // The gig is saved either way: the page says why there are no matches and offers a retry.
+            $error = $e instanceof MatcherException ? $e->reason() : MatcherException::UNAVAILABLE;
+            log_message('error', 'Matching gig {id} failed ({reason}): {message}', ['id' => $gigId, 'reason' => $error, 'message' => $e->getMessage()]);
         }
         MatchRecorder::record($gig, $matches, $error);
 
-        return view('gig-matches', ['gig' => $gig, 'matches' => $matches]);
+        return view('gig-matches', ['gig' => $gig, 'matches' => $matches, 'error' => $error]);
     }
 }

@@ -1,3 +1,5 @@
+# In the ranker: pipeline/features/tag_features.py (same code, except imports and BASE).
+# Used here: TAG_FEATURES, TagMatcher, tag_axes and embed_skills (app.py).
 """
 SkillsFuture tag-match features for the Stage-2 ranker.
 

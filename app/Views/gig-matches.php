@@ -4,9 +4,19 @@
 <?php
 require __DIR__ . '/partials/form-styles.php';
 
-// $gig (gigs row) and $matches (matcher/'s response, or null when matching
-// failed) are injected by Gigs::matches().
+use App\Libraries\MatcherException;
+
+// $gig (gigs row), $matches (matcher/'s response, or null when matching
+// failed) and $error (the MatcherException reason, or null) are injected by
+// Gigs::matches().
 $results = $matches['results'] ?? [];
+$error ??= null;
+$failure = [
+    MatcherException::UNAVAILABLE  => 'Matching is unavailable right now. Your gig is saved; please try again in a moment.',
+    MatcherException::BAD_RESPONSE => 'Something went wrong while finding matches. Your gig is saved; please try again in a moment.',
+    MatcherException::REJECTED     => 'We couldn\'t find matches for this gig because its title and description are empty or invalid.',
+][$error ?? MatcherException::UNAVAILABLE];
+$retry = $error !== MatcherException::REJECTED;
 ?>
 
 <div class="bg-cream-25 border-b border-navy/10">
@@ -25,11 +35,16 @@ $results = $matches['results'] ?? [];
   <?php endif; ?>
 
   <?php if ($matches === null): ?>
-    <div class="rounded-card border border-red-600/20 bg-red-50 px-6 py-4 text-sm text-red-700" role="alert">
-      Matching is unavailable right now. Please refresh this page in a moment.
+    <div class="flex flex-wrap items-center justify-between gap-4 rounded-card border border-red-600/20 bg-red-50 px-6 py-4 text-sm text-red-700" role="alert">
+      <p><?= esc($failure) ?></p>
+      <?php if ($retry): ?>
+        <a href="<?= esc(current_url(), 'attr') ?>" class="shrink-0 rounded-full bg-navy px-5 py-2 text-sm font-semibold text-white hover:bg-navy-dark transition-colors">Try again</a>
+      <?php endif; ?>
     </div>
+  <?php elseif ($results === [] && ($matches['meta']['catalogue_size'] ?? null) === 0): ?>
+    <div class="<?= $cardCls ?> text-sm text-ink/70">No providers have published a showcase yet, so there is no one to match this gig with. Check back soon.</div>
   <?php elseif ($results === []): ?>
-    <div class="<?= $cardCls ?> text-sm text-ink/70">No providers have published a showcase yet.</div>
+    <div class="<?= $cardCls ?> text-sm text-ink/70">We couldn't find experts relevant to this gig. Try adding more detail to its description or choosing different specialisations.</div>
   <?php else: ?>
     <?php foreach ($results as $r): ?>
       <section class="<?= $cardCls ?>">

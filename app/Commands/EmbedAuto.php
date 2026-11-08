@@ -32,8 +32,17 @@ class EmbedAuto extends BaseCommand
     protected $usage       = 'embed:auto [--dry-run]';
     protected $options     = ['--dry-run' => 'Report what is waiting and whether a batch would run, without running it'];
 
+    /**
+     * `php spark embed:auto [--dry-run]`, run by cron every minute.
+     *
+     * @param list<string> $params Unused
+     *
+     * @return int EXIT_SUCCESS (including "nothing to do" and "another run holds the lock"),
+     *             or embed:batch's exit code when a batch ran
+     */
     public function run(array $params)
     {
+        // Non-blocking exclusive lock: if the previous minute's run is still going, skip this one.
         $lock = fopen(self::LOCK_FILE, 'c');
         if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
             CLI::write('Another embed:auto run is still going; skipping.');
@@ -72,6 +81,8 @@ class EmbedAuto extends BaseCommand
     /**
      * Published showcases with no vector, or updated since their vector.
      *
+     * @param BaseConnection $db The app's database
+     *
      * @return array{count: int, oldest: string|null, ids: list<int>} oldest: updated_at of the longest-waiting one
      */
     public static function pending(BaseConnection $db): array
@@ -94,7 +105,12 @@ class EmbedAuto extends BaseCommand
     /**
      * Why a batch should run now, or null if neither threshold is reached.
      *
-     * @param int|null $oldestAge Seconds the oldest waiting showcase has waited; null when none are waiting
+     * @param int      $count          Showcases waiting
+     * @param int|null $oldestAge      Seconds the oldest waiting showcase has waited; null when none are waiting
+     * @param int      $batchSize      Config\Embedding::$autoBatchSize
+     * @param int      $maxWaitMinutes Config\Embedding::$autoMaxWaitMinutes
+     *
+     * @return string|null The reason, for the log line; null means don't run yet
      */
     public static function reason(int $count, ?int $oldestAge, int $batchSize, int $maxWaitMinutes): ?string
     {

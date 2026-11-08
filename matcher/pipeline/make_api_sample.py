@@ -1,3 +1,5 @@
+# No longer in the ranker.
+# Used here: not imported.
 """
 Emit a sample recommendation-API response built from real pipeline output.
 

@@ -42,4 +42,24 @@ abstract class BaseController extends Controller
         // Preload any models, libraries, etc, here.
         // $this->session = service('session');
     }
+
+    /**
+     * Links the pending terms AI tag suggestion stored while the form was filled
+     * in (posted as proposals[]) to the gig / showcase just saved, so a reviewer
+     * sees where they came from and a rejection reaches its owner. Never fails
+     * the save.
+     */
+    protected function attachSuggestedTerms(string $ownerType, int $ownerId): void
+    {
+        $ids = array_values(array_filter(array_map('intval', (array) $this->request->getPost('proposals'))));
+        if ($ids === []) {
+            return;
+        }
+
+        try {
+            service('taxonomyClient')->attach($ids, $ownerType, $ownerId, auth()->id());
+        } catch (\RuntimeException $e) {
+            log_message('error', 'Linking suggested terms to {type} {id} failed: {message}', ['type' => $ownerType, 'id' => $ownerId, 'message' => $e->getMessage()]);
+        }
+    }
 }

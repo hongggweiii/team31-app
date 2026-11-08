@@ -18,16 +18,25 @@ class EmbeddingStore
 {
     private BaseConnection $db;
 
+    /**
+     * Use showcases() or gigs() rather than this.
+     *
+     * @param string              $table The embeddings table
+     * @param string              $key   Its id column (showcase_id / gig_id)
+     * @param BaseConnection|null $db    Defaults to the app's database
+     */
     public function __construct(private readonly string $table, private readonly string $key, ?BaseConnection $db = null)
     {
         $this->db = $db ?? db_connect();
     }
 
+    /** The provider side: showcase_embeddings, written by embed:batch. */
     public static function showcases(?BaseConnection $db = null): self
     {
         return new self('showcase_embeddings', 'showcase_id', $db);
     }
 
+    /** The query side: gig_embeddings, written by matcher/ after each match. */
     public static function gigs(?BaseConnection $db = null): self
     {
         return new self('gig_embeddings', 'gig_id', $db);
@@ -67,7 +76,7 @@ class EmbeddingStore
      * without re-embedding: embed:auto counts a showcase as waiting while it
      * was updated after its vector.
      *
-     * @param list<int> $ids
+     * @param list<int> $ids Ids whose text and record are unchanged
      */
     public function touch(array $ids): void
     {
@@ -77,8 +86,9 @@ class EmbeddingStore
     }
 
     /**
-     * Inserts or replaces vectors in one statement.
+     * Inserts or replaces vectors in one statement (one round trip for a whole batch).
      *
+     * @param string                             $model      The model that produced them (embedding-service's "model")
      * @param array<int, list<float>>            $embeddings Keyed by showcase / gig id
      * @param array<int, string>                 $textHashes Keyed like $embeddings
      * @param array<int, array<string, mixed>>   $fields     Keyed like $embeddings: the ranker-format record each
@@ -92,6 +102,7 @@ class EmbeddingStore
         $this->requireMariaDb();
 
         $now      = date('Y-m-d H:i:s');
+        // One "(?, ?, ...)" group per vector; the vector goes in as JSON text for VEC_FromText().
         $rows     = [];
         $bindings = [];
         foreach ($embeddings as $id => $vector) {
@@ -126,6 +137,8 @@ class EmbeddingStore
      *
      * @param list<float> $vector Same model and dimensions as the stored vectors
      *
+     * @param int         $limit  How many to return (at least 1)
+     *
      * @return list<array{id: int, distance: float}> Nearest first
      */
     public function nearest(array $vector, int $limit = 20): array
@@ -147,7 +160,9 @@ class EmbeddingStore
     /**
      * A stored vector, e.g. to find showcases similar to a given one.
      *
-     * @return list<float>|null
+     * @param int $id A showcase / gig id
+     *
+     * @return list<float>|null The vector, or null if that id has none
      */
     public function vector(int $id): ?array
     {
@@ -162,13 +177,18 @@ class EmbeddingStore
      * A ranker-format record as stored in fields_json. Batches compare against
      * this to spot records that changed outside the embedded text.
      *
-     * @param array<string, mixed> $fields
+     * @param array<string, mixed> $fields The record
+     *
+     * @return string Its JSON, Unicode unescaped (always encoded the same way, so strings compare)
      */
     public static function encodeFields(array $fields): string
     {
         return json_encode($fields, JSON_UNESCAPED_UNICODE);
     }
 
+    /**
+     * @throws RuntimeException On any driver but MySQLi (MariaDB), e.g. the SQLite test database
+     */
     private function requireMariaDb(): void
     {
         if ($this->db->DBDriver !== 'MySQLi') {
