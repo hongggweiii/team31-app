@@ -19,4 +19,8 @@ $routes->group('', ['filter' => 'session'], static function (RouteCollection $ro
     $routes->post('taxonomy-dashboard/taxonomy', 'TaxonomyDashboard::edit', ['as' => 'taxonomy-edit']);
 });
 
+$routes->group('admin', ['filter' => ['session', 'permission:admin.access']], static function (RouteCollection $routes): void {
+    $routes->get('dashboard', 'Dashboard::index', ['as' => 'admin-dashboard']);
+});
+
 service('auth')->routes($routes);

@@ -159,6 +159,33 @@ final class GigMatchesTest extends CIUnitTestCase
         $result->assertSee('Matching is unavailable right now');
     }
 
+    public function testSavesTheRunAndEachSuggestedShowcase(): void
+    {
+        $this->matcher->answer = self::response();
+        $this->matcher->answer['meta'] += ['candidate_pool' => 50, 'machine' => 'CPU: Test 1',
+            'timing_ms' => ['vector_read' => 300.0, 'embed' => 1400.0, 'candidates' => 80.0, 'score' => 2.0, 'response' => 0.5, 'total' => 1782.5]];
+
+        $this->actingAs($this->owner)->get("gigs/{$this->gigId}/matches");
+
+        $run = $this->db->table('analytics_outputs')->get()->getResultArray();
+        $this->assertCount(1, $run);
+        $this->assertSame(['ok', 'CPU: Test 1', 300.0, 1400.0, 1782.5], [$run[0]['status'], $run[0]['matcher_machine'],
+            (float) $run[0]['matcher_vector_read_ms'], (float) $run[0]['matcher_embed_ms'], (float) $run[0]['matcher_total_ms']]);
+        $this->seeInDatabase('run_outputs', ['analytics_output_id' => $run[0]['id'], 'gig_id' => $this->gigId,
+            'rank' => 1, 'provider_id' => 7, 'display_title' => 'Fractional CFO for growth-stage fintechs', 'tag_level' => 2.0]);
+    }
+
+    public function testSavesAFailedRunWithoutShowcases(): void
+    {
+        $this->matcher->answer = new RuntimeException('Matcher returned HTTP 503: embedding-service unavailable', 503);
+
+        $this->actingAs($this->owner)->get("gigs/{$this->gigId}/matches");
+
+        $this->seeInDatabase('analytics_outputs', ['gig_id' => $this->gigId, 'status' => 'error',
+            'error' => 'Matcher returned HTTP 503: embedding-service unavailable']);
+        $this->seeNumRecords(0, 'run_outputs', []);
+    }
+
     public function testAnUnusableAnswerAsksToRetry(): void
     {
         $this->matcher->answer = new MatcherException(MatcherException::BAD_RESPONSE, 'Matcher returned no results: <html>');
