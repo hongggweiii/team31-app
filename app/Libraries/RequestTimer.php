@@ -49,6 +49,7 @@ final class RequestTimer
      */
     private static ?array $stats = null;
 
+    /**
      * On for web requests when Config\RequestTimer::$enabled (development by
      * default); spark commands are never timed.
      *
@@ -167,6 +168,7 @@ final class RequestTimer
         ];
     }
 
+    /**
      * Writes this request's timing report to stderr (the `php spark serve`
      * console), plus the whole action's total when it ends a redirect chain.
      * Runs at shutdown, after the response is sent.

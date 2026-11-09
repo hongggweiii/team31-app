@@ -184,6 +184,8 @@ final class GigMatchesTest extends CIUnitTestCase
         $this->seeInDatabase('analytics_outputs', ['gig_id' => $this->gigId, 'status' => 'error',
             'error' => 'Matcher returned HTTP 503: embedding-service unavailable']);
         $this->seeNumRecords(0, 'run_outputs', []);
+    }
+
     public function testAnUnusableAnswerAsksToRetry(): void
     {
         $this->matcher->answer = new MatcherException(MatcherException::BAD_RESPONSE, 'Matcher returned no results: <html>');

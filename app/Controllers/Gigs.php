@@ -150,15 +150,17 @@ class Gigs extends BaseController
 
         $matches = null;
         $error   = null; // a MatcherException reason when matching failed
+        $message = null; // the exception's full message, saved with the run
 
         try {
             $matches = service('matcherClient')->match(MatcherClient::gigRequest($gig, $tags));
         } catch (RuntimeException $e) {
             // The gig is saved either way: the page says why there are no matches and offers a retry.
-            $error = $e instanceof MatcherException ? $e->reason() : MatcherException::UNAVAILABLE;
-            log_message('error', 'Matching gig {id} failed ({reason}): {message}', ['id' => $gigId, 'reason' => $error, 'message' => $e->getMessage()]);
+            $error   = $e instanceof MatcherException ? $e->reason() : MatcherException::UNAVAILABLE;
+            $message = $e->getMessage();
+            log_message('error', 'Matching gig {id} failed ({reason}): {message}', ['id' => $gigId, 'reason' => $error, 'message' => $message]);
         }
-        MatchRecorder::record($gig, $matches, $error);
+        MatchRecorder::record($gig, $matches, $message);
 
         return view('gig-matches', ['gig' => $gig, 'matches' => $matches, 'error' => $error]);
     }
