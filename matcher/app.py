@@ -745,7 +745,11 @@ async def match(req: MatchRequest, background: BackgroundTasks):
         return response([], cat, req.top_k)
     gig = {"hire_id": req.hire_id, "hire_title": req.hire_title, "hire_description": req.hire_description,
            "industry": req.industry, "tags": {"categories": [c.model_dump() for c in req.taxonomy]}}
-    vector, model_name = embed_gig(gig)
+    vector = None if RANKER else stored_gig_vector(gig)  # a revisit or refresh skips embedding-service
+    stored = vector is not None
+    t_read = time.perf_counter()
+    if not stored:
+        vector, model_name = embed_gig(gig)
     t1 = time.perf_counter()
     rows = candidates(cat, gig, vector)
     t2 = time.perf_counter()
