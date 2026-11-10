@@ -184,7 +184,8 @@ final class RequestTimer
 
         // Time since PHP received the request; connect time only if the database was used.
         $config  = config(RequestTimerConfig::class);
-        $total   = (microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000;
+        $s       = self::stats();
+        $total   =(microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000;
         $connect = self::$queries === [] ? 0.0 : (float) Database::connect()->getConnectDuration(6) * 1000;
         $queryMs = array_sum(array_column(self::$queries, 'ms'));
 
