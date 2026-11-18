@@ -32,7 +32,7 @@ Clone it **next to** the folder that holds `matcher/` and `embedding-service/`, 
 ```
 projects/
 ├── your-app/              your PHP website
-├── senseigigz-engine/     the unzipped handover package
+├── team31-app/           your clone of the team31-app repository
 │   ├── matcher/
 │   ├── embedding-service/
 │   └── handover/

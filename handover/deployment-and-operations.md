@@ -21,7 +21,7 @@ your PHP app ──HTTP──▶ taxonomy-service (8003) ──HTTPS──▶ Op
 | matcher | `matcher/` | Ranks profiles for a gig with the ranker's model | **Python 3.12+** (its XGBoost needs it); database access; the same model files (loaded briefly to build its skill cache); a writable `matcher/cache/` (~19 MB per taxonomy version) |
 | taxonomy-service (**optional**) | `taxonomy-service/` | AI tag suggestion on your forms, and the review of terms the taxonomy doesn't have (`integration-guide.md`, G9-G11) | Python 3.10+; database access; an **OpenAI API key** and outbound HTTPS to OpenAI; little memory (no model of its own) |
 
-We run all three on Python 3.13. They are plain FastAPI apps served by uvicorn. Keep the service folders and `engine.env` together as the package unzips them; the commands below assume that layout.
+We run all three on Python 3.13. They are plain FastAPI apps served by uvicorn. Deploy the service folders from your clone of the team31-app repository, side by side with `engine.env` next to them, as in the repository; the commands below assume that layout. You don't need the rest of the repository on the server.
 
 **Matching works without taxonomy-service.** It only helps users pick SkillsFuture tags and lets you grow the taxonomy. Skip it, and everything about it below, if you don't want AI suggestions or don't want to send form text to OpenAI.
 
@@ -82,8 +82,8 @@ A systemd unit for the matcher, for example (the embedding-service one is the sa
 
 ```ini
 [Service]
-WorkingDirectory=/opt/senseigigz-engine/matcher
-ExecStart=/opt/senseigigz-engine/matcher/.venv/bin/uvicorn app:app --env-file ../engine.env --host 127.0.0.1 --port 8002
+WorkingDirectory=/opt/team31-app/matcher
+ExecStart=/opt/team31-app/matcher/.venv/bin/uvicorn app:app --env-file ../engine.env --host 127.0.0.1 --port 8002
 Restart=on-failure
 User=senseigigz
 ```

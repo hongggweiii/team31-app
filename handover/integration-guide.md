@@ -1,12 +1,12 @@
 # Integration guide: the code your app writes
 
-You run our Python services as they are (`embedding-service/` and `matcher/`, and optionally `taxonomy-service/`). Your app only has to connect to them. That connecting code, the **glue**, is listed below. Every item is something team31-app does today; our version is in `reference/` (CodeIgniter 4, for reading).
+You run our Python services as they are (`embedding-service/` and `matcher/`, and optionally `taxonomy-service/`). Your app only has to connect to them. That connecting code, the **glue**, is listed below. Every item is something team31-app does today; our version is in `app/` of the team31-app repository (CodeIgniter 4, for reading).
 
 The glue's mistakes don't raise errors. If your profile text is built slightly differently, or a profile edit is never re-embedded, everything keeps working, but matches get quietly worse. That is why each item has exact rules, and why `testing/check.py` checks your output against ours.
 
 **Our words:** a *showcase* is a provider's profile, and a *gig* is a hirer's job post. The engine's tables and fields use these names; yours can differ (`sql/README.md`, Step 1).
 
-| # | Glue | When it runs | Our reference (in `reference/app/`) |
+| # | Glue | When it runs | Our reference (in `app/`) |
 |---|---|---|---|
 | G1 | Turn a profile into the five text fields, its text and its hash | When embedding a profile | `Libraries/ProviderEmbedder.php` |
 | G2 | Embed profiles and store the vectors | In a background job | `Commands/EmbedAuto.php`, `Commands/EmbedBatch.php`, `Libraries/EmbeddingStore.php` |
@@ -18,7 +18,7 @@ The glue's mistakes don't raise errors. If your profile text is built slightly d
 
 **Optional.** Matching works without these. Build them only if you want what they give:
 
-| # | Glue | When it runs | Our reference (in `reference/app/`) |
+| # | Glue | When it runs | Our reference (in `app/`) |
 |---|---|---|---|
 | G8 | Record each match and show a matcher dashboard | After a matches page is sent; an admin page | `Libraries/MatchRecorder.php`, `Controllers/Dashboard.php`, `Views/dashboard.php` |
 | G9 | "Suggest tags with AI" on your gig and profile forms | When a user clicks it; when the form is saved | `Controllers/TagSuggestions.php`, `Libraries/TaxonomyClient.php`, `Controllers/BaseController.php` (`attachSuggestedTerms()`), `Views/partials/taxonomy-picker.php` |
@@ -168,7 +168,7 @@ Don't delete the embedding when unpublishing. If the profile is republished, the
 
 ## G4. Storing tags
 
-Gigs and profiles are tagged from the SkillsFuture taxonomy (`sf_*` tables): up to **2 categories**, **1-3 specialisations** under each, and up to **8 skills** per specialisation, each chosen from the skills linked to it in `sf_specialisation_skills`. These are the limits the model was trained with. Enforce them in your forms (our `Taxonomy::check()` does). Our picker (`reference/app/Views/partials/taxonomy-picker.php`) shows one way to build the form.
+Gigs and profiles are tagged from the SkillsFuture taxonomy (`sf_*` tables): up to **2 categories**, **1-3 specialisations** under each, and up to **8 skills** per specialisation, each chosen from the skills linked to it in `sf_specialisation_skills`. These are the limits the model was trained with. Enforce them in your forms (our `Taxonomy::check()` does). Our picker (`app/Views/partials/taxonomy-picker.php`) shows one way to build the form.
 
 - Store each chosen specialisation in `showcase_specialisations` / `gig_specialisations`.
 - Store each chosen skill **under its specialisation** in `showcase_skills` / `gig_skills`. The foreign keys refuse a skill under a specialisation that the owner doesn't have, or that doesn't contain it. Offer only the skills linked to each specialisation.
@@ -256,7 +256,7 @@ Your app needs only the two service addresses and timeouts. Put them wherever yo
 
 The services' own settings (database, device) are separate: see `engine.env.example` and `deployment-and-operations.md`.
 
-If you build G9-G11, add the taxonomy-service address (ours: `http://localhost:8003/`), a timeout of about 25 s (a suggestion is an OpenAI call; keep it above `taxonomy.openaiTimeout` and under your PHP `max_execution_time`), and the service token (`taxonomy.serviceToken`), sent as the `X-Service-Token` header on every call. Our values are in `reference/app/Config/Taxonomy.php`.
+If you build G9-G11, add the taxonomy-service address (ours: `http://localhost:8003/`), a timeout of about 25 s (a suggestion is an OpenAI call; keep it above `taxonomy.openaiTimeout` and under your PHP `max_execution_time`), and the service token (`taxonomy.serviceToken`), sent as the `X-Service-Token` header on every call. Our values are in `app/Config/Taxonomy.php`.
 
 ---
 
@@ -308,7 +308,7 @@ taxonomy-service has no idea of users or roles. It trusts whatever your server s
 
 Send the real user's id as `user_id` (G9) and the reviewer's id as `admin_user_id` (G10), so the records say who did what. Never take these ids from the request body: use your session.
 
-**Our reference app is not a model for this.** In team31-app, `/taxonomy-dashboard` only requires a login (`reference/app/Controllers/TaxonomyDashboard.php` says "no role is checked"); only our matcher dashboard (G8) checks a role (Shield's `admin.access` permission, in our `Config/Routes.php`). Apply a reviewer check to every review route in your app.
+**Our reference app is not a model for this.** In team31-app, `/taxonomy-dashboard` only requires a login (`app/Controllers/TaxonomyDashboard.php` says "no role is checked"); only our matcher dashboard (G8) checks a role (Shield's `admin.access` permission, in our `Config/Routes.php`). Apply a reviewer check to every review route in your app.
 
 ## G9. AI tag suggestion on the forms
 

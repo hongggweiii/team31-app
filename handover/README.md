@@ -1,6 +1,6 @@
 # SenseiGigs recommendation engine: handover
 
-This package lets you add our gig → expert matching to your own website. A hirer posts a gig and immediately sees the providers whose profiles fit it best, ranked by the model the Data team trained on SkillsFuture-tagged data.
+These documents let you add our gig → expert matching to your own website. A hirer posts a gig and immediately sees the providers whose profiles fit it best, ranked by the model the Data team trained on SkillsFuture-tagged data.
 
 **Start with `integration-steps.md`.** It takes you through the whole integration in order, with a check at the end of every step. The other documents hold the details it links to.
 
@@ -15,17 +15,24 @@ You need:
 
 `integration-steps.md`, step 0, has the details.
 
-## What's in the package
+## What you receive
+
+These documents, and access to the code on GitHub. Clone the code first: every path in these documents is relative to that clone.
+
+```bash
+git clone https://github.com/hongggweiii/team31-app.git
+```
 
 ```
-senseigigz-engine/
-├── README.md
+team31-app/                (the clone)
 ├── handover/            these documents, the SQL scripts, the taxonomy seed, the API specs and the tests
 ├── embedding-service/   service 1: turns text into vectors (port 8001)
 ├── matcher/             service 2: ranks your profiles for a gig (port 8002), with a pinned copy of the ranker
 ├── taxonomy-service/    optional service 3: AI tag suggestion and the review of new taxonomy terms (port 8003)
-└── reference/           team31-app's PHP that the guide cites (CodeIgniter 4): read it, don't run it
+└── app/                 team31-app's own website (CodeIgniter 4): the PHP the guide cites. Read it, don't run it
 ```
+
+You deploy only the three service folders. The rest of the repository is our demo website, there for reference.
 
 **You run the services as they are.** You don't change their code. If your tables are named differently from ours, a small adapter (two SQL views) bridges the gap (`sql/README.md`).
 
@@ -72,8 +79,8 @@ Our words: a **showcase** is a provider's profile, and a **gig** is a hirer's jo
 | `ranker.md` | What the Data team's ranker repo is, and when you would ever need it (only for engine upgrades) |
 | `data-generation.md` | The repo that built the training data (BT4103-Scrape-and-Tag), and when you would ever need it (extending the taxonomy, retraining) |
 
-## Not in this package
+## Other repositories
 
 - **The ranker repo:** the Data team's training workspace. You only need it to upgrade the engine to a new model (`ranker.md`).
 - **The data generation repo** (https://github.com/mcjuh/BT4103-Scrape-and-Tag): the crawled pages, the generated and graded training records, and the full SkillsFuture framework tables (`data-generation.md`).
-- **team31-app's own website** (forms, pages, accounts): you integrate into your own site. `reference/` has the parts the guide cites.
+- **team31-app's own website** (`app/` in the clone: forms, pages, accounts) is not something you deploy: you integrate into your own site. The guide cites the parts that matter.

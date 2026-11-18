@@ -12,7 +12,7 @@ BT4103-Scrape-and-Tag            crawls pages, extracts gig and provider records
 ranker (ranker.md)               trains and evaluates the model on those records
         │
         ▼
-matcher/ (this package)          serves the trained model; the sf_* taxonomy your database
+matcher/ (team31-app)            serves the trained model; the sf_* taxonomy your database
                                  loads is the part of sf_v1 those records use
 ```
 
@@ -32,7 +32,7 @@ The records are **synthetic or derived from public web pages**: no SenseiGigs us
 
 ## When you need it
 
-**Not to integrate.** Nothing in this package reads it, and none of the integration steps use it.
+**Not to integrate.** Nothing in team31-app reads it, and none of the integration steps use it.
 
 You would use it only to:
 1. **Extend the taxonomy properly.** `sf_v1` in your database is the part of the SkillsFuture framework the training records used (38 categories, 154 specialisations, 825 skills). The full framework tables are in `data/reference/skillsfuture/`. Adding terms from them (or through the optional term review, `integration-guide.md`, G10) is safe; the model scores tag matches on names, whatever the term.

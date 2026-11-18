@@ -4,7 +4,7 @@ Follow these steps in order on a **staging** copy of your site and database. Eac
 
 `check.py` (in `testing/`) checks your work as you go. Early on, some of its checks are **expected** to fail because later steps haven't been done yet. Each step lists which checks must pass by then.
 
-Paths below are relative to the unzipped `senseigigz-engine/` folder.
+Paths below are relative to your clone of the team31-app repository (https://github.com/hongggweiii/team31-app).
 
 ---
 
@@ -23,7 +23,7 @@ Paths below are relative to the unzipped `senseigigz-engine/` folder.
 
 ## Step 1. Read the overview
 
-Read `handover/README.md` (what you receive and what you build), then skim `handover/integration-guide.md` (the code you will write: items G1-G7, and the optional G8-G10). `reference/` holds the team31-app PHP the guide cites. It is CodeIgniter 4 code to read, not to run.
+Read `handover/README.md` (what you receive and what you build), then skim `handover/integration-guide.md` (the code you will write: items G1-G7, and the optional G8-G10). `app/` holds the team31-app PHP the guide cites. It is CodeIgniter 4 code to read, not to run.
 
 ## Step 2. Create the tables
 
@@ -71,7 +71,7 @@ taxonomy-service is optional: start it at step 9b if you want it.
 
 ## Step 5. Tag gigs and profiles with SkillsFuture (G4)
 
-Add a SkillsFuture picker to your gig and profile forms, and save the selections as described in `integration-guide.md`, G4. Our picker is `reference/app/Views/partials/taxonomy-picker.php` (HTML and JavaScript you can adapt). If you have existing tags, plan their mapping now (`data-setup.md`, step 3).
+Add a SkillsFuture picker to your gig and profile forms, and save the selections as described in `integration-guide.md`, G4. Our picker is `app/Views/partials/taxonomy-picker.php` (HTML and JavaScript you can adapt). If you have existing tags, plan their mapping now (`data-setup.md`, step 3).
 
 **Done when:** you can save a profile and a gig with tags, the rows appear in `showcase_*` / `gig_*` tables, and `check.py database` passes D6.
 
