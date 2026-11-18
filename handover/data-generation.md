@@ -28,7 +28,7 @@ matcher/ (this package)          serves the trained model; the sf_* taxonomy you
 | `data/reference/skillsfuture/` | The official SkillsFuture Singapore framework tables (sectors, tracks, job roles, 2,088 skills) that `sf_v1` is built from |
 | `docs/` | `design.md` (every design decision and why), `schema_v2.md` (the record shape), `ranker_input_spec.md` |
 
-The records are **synthetic or derived from public web pages**: no SenseiGigs user data is in them. The only SenseiGigs material is the test workbook you gave us, in `data/reference/client_documents/`. The pipeline's LLM calls went to NUS SoC's SOCLAAS API, which you would replace with your own provider to rerun it.
+The records are **synthetic or derived from public web pages**: no SenseiGigs user data is in them. The pipeline's LLM calls went to NUS SoC's SOCLAAS API, which you would replace with your own provider to rerun it.
 
 ## When you need it
 

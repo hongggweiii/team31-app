@@ -8,13 +8,26 @@ Run the scripts in `sql/` (`sql/README.md`). If your profile and gig tables have
 
 ## 2. Load the SkillsFuture taxonomy
 
-> **PENDING.** The taxonomy seed (`seed/`) is not in this package yet. We still have to decide which version to ship:
-> - the original SkillsFuture `sf_v1` the model was trained on: 38 categories, 154 specialisations, 825 skills, 2,073 skill links;
-> - or that plus the few skills added on our taxonomy dashboard since (829 skills, 2,079 links).
->
-> This section will then give the files and the import steps.
+The seed is `seed/sf_taxonomy.sql`: **38 categories, 155 specialisations, 831 skills and 2,081 specialisation-skill links**. It is SkillsFuture `sf_v1` exactly as the model was trained on (154 specialisations, 825 skills, 2,073 links), plus the terms team31's AI tag review approved since: the specialisation "Cyber Trust Certification Guidance" (Infocomm Technology), six skills, and two existing skills linked under one more specialisation each.
 
-Whichever version ships, load it once, before any gig or showcase is tagged. Don't edit the `sf_*` rows afterwards without re-checking tagged data: renaming or deleting an item changes or removes the tags that point at it (the foreign keys cascade). Adding terms is safe: that is all the optional term review does (`integration-guide.md`, G10). When the skill list grows, the matcher builds a new skill-vector cache at its next catalogue reload (after the next profile change), so that one reload takes longer.
+Load it once, after `sql/01_taxonomy.sql`, into the empty `sf_*` tables:
+
+```bash
+mysql -h <host> -u <user> -p <database> < seed/sf_taxonomy.sql
+```
+
+It runs as one transaction and keeps team31's ids. Then check the counts (or run `testing/check.py database`, D5):
+
+```sql
+SELECT (SELECT COUNT(*) FROM sf_categories) AS categories,                -- 38
+       (SELECT COUNT(*) FROM sf_specialisations) AS specialisations,       -- 155
+       (SELECT COUNT(*) FROM sf_skills) AS skills,                         -- 831
+       (SELECT COUNT(*) FROM sf_specialisation_skills) AS links;           -- 2081
+```
+
+The matcher builds its skill-vector cache from these 831 skills on its first start, so that start takes longer.
+
+Load it before any gig or showcase is tagged. Don't edit the `sf_*` rows afterwards without re-checking tagged data: renaming or deleting an item changes or removes the tags that point at it (the foreign keys cascade). Adding terms is safe: that is all the optional term review does (`integration-guide.md`, G10). When the skill list grows, the matcher builds a new skill-vector cache at its next catalogue reload (after the next profile change), so that one reload takes longer.
 
 ## 3. Tag your existing gigs and showcases
 

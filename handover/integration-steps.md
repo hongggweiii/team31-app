@@ -47,9 +47,13 @@ cp ../engine.env.example ../../engine.env                              # fill in
 
 ## Step 3. Load the SkillsFuture taxonomy
 
-**PENDING:** the seed isn't in this package yet. See `handover/data-setup.md`, step 2, and ask team31 for it.
+Run `handover/seed/sf_taxonomy.sql` once into the empty `sf_*` tables (`handover/data-setup.md`, step 2):
 
-**Done when:** `check.py database` passes D5.
+```bash
+mysql -h <host> -u <user> -p <database> < handover/seed/sf_taxonomy.sql
+```
+
+**Done when:** `check.py database` passes D5, with 38 categories, 155 specialisations, 831 skills and 2,081 links.
 
 ## Step 4. Install and start the two engine services
 

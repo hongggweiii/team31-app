@@ -20,7 +20,7 @@ You need:
 ```
 senseigigz-engine/
 ├── README.md
-├── handover/            these documents, the SQL scripts, the API specs and the tests
+├── handover/            these documents, the SQL scripts, the taxonomy seed, the API specs and the tests
 ├── embedding-service/   service 1: turns text into vectors (port 8001)
 ├── matcher/             service 2: ranks your profiles for a gig (port 8002), with a pinned copy of the ranker
 ├── taxonomy-service/    optional service 3: AI tag suggestion and the review of new taxonomy terms (port 8003)
@@ -60,6 +60,7 @@ Our words: a **showcase** is a provider's profile, and a **gig** is a hirer's jo
 |---|---|
 | `integration-steps.md` | **The order to do everything in**, with "done when" checks |
 | `integration-guide.md` | **The glue**, item by item: exact rules, code to copy, pitfalls |
+| `seed/sf_taxonomy.sql` | The SkillsFuture taxonomy to load once (`data-setup.md`, step 2) |
 | `sql/README.md` and `sql/` | Creating the tables, with variants for your id type and adapter views for your table names |
 | `data-setup.md` | Loading the taxonomy, tagging existing data, the first embedding run |
 | `deployment-and-operations.md` | Installing and running the services, logs, performance, runbook, known limits |
@@ -70,11 +71,6 @@ Our words: a **showcase** is a provider's profile, and a **gig** is a hirer's jo
 | `../taxonomy-service/README.md` | How the optional taxonomy-service works inside: the life of a new term, the duplicate check, its settings |
 | `ranker.md` | What the Data team's ranker repo is, and when you would ever need it (only for engine upgrades) |
 | `data-generation.md` | The repo that built the training data (BT4103-Scrape-and-Tag), and when you would ever need it (extending the taxonomy, retraining) |
-
-## Pending
-
-- **Taxonomy seed:** which version of the SkillsFuture taxonomy to ship, and the import files (`data-setup.md`, step 2). Until then, integration stops at step 3.
-- **Contacts:** who at team31 answers questions after the handover.
 
 ## Not in this package
 

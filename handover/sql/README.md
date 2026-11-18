@@ -4,7 +4,7 @@ The scripts run on your MariaDB database. Use **MariaDB 11.7 or later**; we run 
 
 | Script | Creates | Written by | Read by |
 |---|---|---|---|
-| `01_taxonomy.sql` | `sf_categories`, `sf_specialisations`, `sf_skills`, `sf_specialisation_skills` | the taxonomy seed, once (pending; see `../data-setup.md`) | your forms, the matcher |
+| `01_taxonomy.sql` | `sf_categories`, `sf_specialisations`, `sf_skills`, `sf_specialisation_skills` | the taxonomy seed, once (`../seed/sf_taxonomy.sql`; see `../data-setup.md`) | your forms, the matcher |
 | `<variant>/02_tag_links.sql` | `showcase_specialisations`, `showcase_skills`, `gig_specialisations`, `gig_skills` | your app, when a gig or profile is saved | the matcher (profiles); your app (gigs, for the `/match` request) |
 | `<variant>/03_embeddings.sql` | `showcase_embeddings`, `gig_embeddings` | your app (profiles); the matcher (gigs) | the matcher |
 | `<variant>/04_run_records.sql` (**optional**, G8) | `analytics_outputs`, `run_outputs` | your app, after each match | your matcher dashboard |
