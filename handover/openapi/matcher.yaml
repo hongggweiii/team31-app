@@ -10,12 +10,16 @@ info:
     Source: `matcher/app.py`; pipeline in `matcher/pipeline/`, pinned by `matcher/RANKER_VERSION`.
 
     **What happens in a request**
-    1. The gig is embedded live by embedding-service (`POST /embed/gigs`, 3 s timeout).
+    1. The gig's vector: if `gig_embeddings` already holds one for this `hire_id`,
+       made from the same title and description by the same model, it is reused
+       (a revisit or refresh of the matches page). Otherwise the gig is embedded
+       live by embedding-service (`POST /embed/gigs`, 3 s timeout).
     2. Refined BM25 and cosine similarity run over the whole catalogue, are fused
        with RRF (k=60), and the top 50 become candidates.
     3. 17 features per candidate, z-scored within the request, are scored by the
        LambdaMART model (XGBoost). The best `top_k` are returned.
-    4. After the response is sent, the gig's vector is saved to `gig_embeddings`.
+    4. After the response is sent, a freshly embedded gig's vector is saved to
+       `gig_embeddings` (step 1 reuses it next time).
 
     **The catalogue** is the showcases with `status = 'published'` and a
     `showcase_embeddings` row whose `fields_json` is not null, with their
@@ -306,6 +310,44 @@ components:
           type: string
         ranking_is:
           type: string
+        gig_vector:
+          type: string
+          enum: [stored, embedded]
+          description: |
+            `stored`: the gig's vector was read from `gig_embeddings` (same gig id,
+            text and model as before), so embedding-service wasn't called.
+            `embedded`: it was embedded live, and is saved after the response.
+        timing_ms:
+          type: object
+          description: |
+            Where the matcher's time went, in milliseconds, for monitoring
+            (team31-app saves it per run: `integration-guide.md`, G8). Not needed
+            to show results.
+          properties:
+            vector_read:
+              type: [number, "null"]
+              description: Looking up the stored gig vector, found or not.
+            embed:
+              type: [number, "null"]
+              description: The live embedding-service call; null when the stored vector was reused.
+            candidates:
+              type: number
+              description: BM25 + cosine + RRF + tag features over the catalogue.
+            score:
+              type: number
+              description: The XGBoost model.
+            response:
+              type: number
+              description: Building the response.
+            total:
+              type: number
+              description: The whole match inside the matcher (not the HTTP round trip).
+        machine:
+          type: string
+          description: |
+            What the matcher runs on: the `MATCHER_MACHINE` setting if set (e.g. a
+            cloud instance type), otherwise `CPU: <processor name>`.
+          example: "CPU: Apple M1 Pro"
     HTTPValidationError:
       type: object
       properties:

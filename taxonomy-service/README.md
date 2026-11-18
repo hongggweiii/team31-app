@@ -212,7 +212,7 @@ If OpenAI is unavailable, only the `exact` and `fuzzy` checks run.
 
 ### Settings and security
 
-These settings are read from the app's `.env`:
+These settings are read from the app's `.env` in team31-app. In the handover package, they come from `taxonomy.env`, passed with `uvicorn --env-file ../taxonomy.env` (`handover/deployment-and-operations.md`); environment variables always win:
 
 | Setting | Default | What it does |
 |---|---|---|

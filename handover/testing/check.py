@@ -10,13 +10,17 @@ staging copy of your database, never production.
     python check.py --env-file ../../engine.env lifecycle --showcase-id 123
                                              # you edit, unpublish and republish it in your app; it watches
     python check.py fixtures my_output.json  # your code's output for fixtures/*.json
+    python check.py --env-file ../../taxonomy.env taxonomy [--suggest]
+                                             # the optional taxonomy-service (--suggest: one real OpenAI call)
 
 Settings, from environment variables or --env-file (the engine's engine.env works as it is:
 its database.default.* and embedding.baseURL keys are read as DB_* and EMBEDDING_URL):
     EMBEDDING_URL   default http://localhost:8001
     MATCHER_URL     default http://localhost:8002
     DB_HOST, DB_PORT (3306), DB_USER, DB_PASSWORD, DB_NAME   for `database` and `lifecycle`
-    CHECK_GIG_ID    an existing gig id: `services` then also checks its vector is saved after /match
+    CHECK_GIG_ID    an existing gig id: `services` then also checks its vector is saved after /match and reused
+    TAXONOMY_URL    default http://localhost:8003
+    TAXONOMY_TOKEN  the service's X-Service-Token (read from taxonomy.serviceToken in taxonomy.env)
 Environment variables win over the file.
 
 Exit code 0 when nothing FAILs (WARNs are allowed). Needs: pip install -r requirements.txt
@@ -56,9 +60,9 @@ def warn(name: str, ok: bool, detail: str = "") -> bool:
     return report("PASS" if ok else "WARN", name, detail)
 
 
-def call(base: str, path: str, body=None, timeout: float = 60):
+def call(base: str, path: str, body=None, timeout: float = 60, headers: dict | None = None):
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(base.rstrip("/") + path, data, {"Content-Type": "application/json"})
+    req = urllib.request.Request(base.rstrip("/") + path, data, {"Content-Type": "application/json", **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.load(r)
@@ -99,7 +103,8 @@ def schemas(spec_file: str):
 
 ENGINE_KEYS = {"database.default.hostname": "DB_HOST", "database.default.port": "DB_PORT",
                "database.default.username": "DB_USER", "database.default.password": "DB_PASSWORD",
-               "database.default.database": "DB_NAME", "embedding.baseURL": "EMBEDDING_URL"}
+               "database.default.database": "DB_NAME", "embedding.baseURL": "EMBEDDING_URL",
+               "taxonomy.serviceToken": "TAXONOMY_TOKEN"}
 
 
 def load_env_file(path: Path) -> None:
@@ -217,9 +222,14 @@ def check_services(emb: str, mat: str) -> None:
         time.sleep(2)
         conn = db()
         rows = query(conn, "SELECT model FROM gig_embeddings WHERE gig_id = %s", (gig_id,))
-        check(f"M14 gig {gig_id}'s vector is saved to gig_embeddings after /match", len(rows) == 1 and rows[0]["model"] == model, str(rows))
+        if check(f"M14 gig {gig_id}'s vector is saved to gig_embeddings after /match", len(rows) == 1 and rows[0]["model"] == model, str(rows)):
+            s2, again = call(mat, "/match", req)
+            vec = again.get("meta", {}).get("gig_vector") if s2 == 200 else f"HTTP {s2}"
+            check(f"M15 matching gig {gig_id} again reuses its saved vector (meta.gig_vector 'stored')", vec == "stored",
+                  f"got {vec!r}: the matcher learns the model name from embedding-service at startup and every 2 minutes, "
+                  "so if it started before embedding-service, wait 2 minutes and run again")
     else:
-        report("WARN", "M14 skipped: set CHECK_GIG_ID to an existing gig id to check gig vectors are saved")
+        report("WARN", "M14-M15 skipped: set CHECK_GIG_ID to an existing gig id to check gig vectors are saved and reused")
 
 
 # ---- database ----------------------------------------------------------------------
@@ -428,6 +438,97 @@ def check_fixtures(output: Path) -> None:
             check(f"{kind} {case['id']} ({case['case']})", not diffs, "\n       ".join(diffs[:6]))
 
 
+# ---- taxonomy-service (optional) ---------------------------------------------------
+
+def check_taxonomy(tax: str, suggest: bool) -> None:
+    """The optional taxonomy-service: health, the service token, lookups against your sf_* tables, the review
+    queue's format, and the tables it writes. Read-only, except --suggest (one OpenAI call; it may leave a
+    pending proposal in the review queue, which you can reject)."""
+    tv = schemas("taxonomy-service.yaml") or (lambda name, data: "")
+    token = os.environ.get("TAXONOMY_TOKEN", "")
+    auth = {"X-Service-Token": token} if token else {}
+    conn = db() if all(os.environ.get(k) for k in ("DB_HOST", "DB_USER", "DB_NAME")) else None
+
+    print("\n== taxonomy-service", tax)
+    s, h = call(tax, "/health", headers=auth)
+    keys = ["status", "model", "openai_key", "categories", "specialisations", "skills", "pending"]
+    check("T1 GET /health is 200 with its fields", s == 200 and isinstance(h, dict) and all(k in h for k in keys), f"HTTP {s}: {str(h)[:200]}")
+    if s != 200:
+        if s == 401:
+            report("FAIL", "T1 answered 401: set TAXONOMY_TOKEN (or taxonomy.serviceToken in --env-file) to the service's token")
+        return
+    warn("T2 an OpenAI key is set (else every suggestion answers 503)", h["openai_key"] is True)
+    if token:
+        check("T3 a request without X-Service-Token is refused with 401", call(tax, "/health")[0] == 401)
+    else:
+        warn("T3 taxonomy.serviceToken is set", call(tax, "/health")[0] == 401,
+             "the service accepts calls from anyone who can reach it: set taxonomy.serviceToken (deployment-and-operations.md)")
+
+    if conn is None:
+        report("WARN", "T4-T7 skipped: give the database settings (taxonomy.env or DB_*) to compare with your sf_* tables")
+    else:
+        n = query(conn, "SELECT (SELECT COUNT(*) FROM sf_categories) c, (SELECT COUNT(*) FROM sf_specialisations) s, "
+                        "(SELECT COUNT(*) FROM sf_skills) k")[0]
+        check("T4 /health counts equal your sf_* tables", (h["categories"], h["specialisations"], h["skills"]) == (n["c"], n["s"], n["k"]),
+              f"service {h['categories']}/{h['specialisations']}/{h['skills']} vs database {n['c']}/{n['s']}/{n['k']}: "
+              "POST /refresh after editing the taxonomy (or wrong database)")
+        skill = next(iter(query(conn, "SELECT id, name FROM sf_skills WHERE CHAR_LENGTH(name) >= 12 ORDER BY id LIMIT 1")), None)
+        if skill:
+            s, r = call(tax, "/lookup", {"name": skill["name"].upper(), "kind": "skill"}, headers=auth)
+            check(f"T5 /lookup finds \"{skill['name']}\" in another case", s == 200 and r.get("found") and r.get("id") == skill["id"]
+                  and r.get("match_type") == "exact", f"HTTP {s}: {r}")
+            typo = skill["name"][:5] + skill["name"][6:]
+            s, r = call(tax, "/lookup", {"name": typo, "kind": "skill"}, headers=auth)
+            check(f"T6 /lookup matches the misspelling \"{typo}\"", s == 200 and r.get("found") and r.get("id") == skill["id"]
+                  and r.get("match_type") == "fuzzy", f"HTTP {s}: {r}")
+        s, r = call(tax, "/lookup", {"name": "Zzqx Nonexistent Skill 4711", "kind": "skill"}, headers=auth)
+        check("T7 /lookup reports an unknown name as not found", s == 200 and r.get("found") is False, f"HTTP {s}: {r}")
+
+    s, r = call(tax, "/proposals?status=pending_review&limit=50", headers=auth)
+    rows = r.get("proposals", []) if s == 200 and isinstance(r, dict) else []
+    bad = [f"#{p.get('id')}: {tv('Proposal', p)}" for p in rows if tv("Proposal", p)]
+    check(f"T8 GET /proposals is 200 and its rows match the spec ({len(rows)} pending)", s == 200 and not bad, f"HTTP {s}; {bad[:3]}")
+
+    if conn is not None:
+        have = {r["t"] for r in query(conn, "SELECT table_name AS t FROM information_schema.tables WHERE table_schema = DATABASE()")}
+        check("T9 taxonomy_proposals and user_notifications exist (sql/<variant>/05_taxonomy_review.sql)",
+              {"taxonomy_proposals", "user_notifications"} <= have)
+        cols = {(r["t"], r["c"]) for r in query(conn, "SELECT table_name AS t, column_name AS c FROM information_schema.columns "
+                                                      "WHERE table_schema = DATABASE() AND column_name = 'user_id'")}
+        check("T10 showcases and gigs have user_id (the owner a rejection notifies)", {("showcases", "user_id"), ("gigs", "user_id")} <= cols,
+              "add user_id to your adapter views (sql/README.md, Step 1)")
+
+    if not suggest:
+        report("WARN", "T11 skipped: run with --suggest to make one real suggestion (an OpenAI call; it may add a pending proposal)")
+        return
+    text = ("We are a regional bank. Review our anti-money laundering controls and customer due diligence against MAS Notice 626, "
+            "then train our compliance team. Deliverable: a gap report with prioritised fixes.")
+    t0 = time.perf_counter()
+    s, r = call(tax, "/suggest", {"title": "AML controls review", "text": text, "owner_type": "gig"}, timeout=60, headers=auth)
+    secs = time.perf_counter() - t0
+    if not check(f"T11 POST /suggest is 200 ({secs:.1f} s)", s == 200 and isinstance(r, dict) and "tags" in r, f"HTTP {s}: {str(r)[:300]}"):
+        return
+    bad = [tv("SuggestedCategory", c) for c in r["tags"] if tv("SuggestedCategory", c)]
+    bad += [tv("Proposal", p) for p in r["pending"] if tv("Proposal", p)]
+    check("T12 the suggestion matches the spec", not bad, "; ".join(bad[:3]))
+    specs = [(c, sp) for c in r["tags"] for sp in c.get("specialisations", [])]
+    check("T13 it keeps to the form limits (2 categories, 3 specialisations each, 8 skills each)",
+          len(r["tags"]) <= 2 and all(len(c["specialisations"]) <= 3 for c in r["tags"]) and all(len(sp["skills"]) <= 8 for _, sp in specs))
+    if conn is not None and specs:
+        wrong = []
+        for c, sp in specs:
+            if not query(conn, "SELECT 1 FROM sf_specialisations WHERE id = %s AND category_id = %s", (sp["id"], c["id"])):
+                wrong.append(f"specialisation {sp['id']} not under category {c['id']}")
+            for k in sp["skills"]:
+                if not query(conn, "SELECT 1 FROM sf_specialisation_skills WHERE specialisation_id = %s AND skill_id = %s", (sp["id"], k["id"])):
+                    wrong.append(f"skill {k['id']} not linked to specialisation {sp['id']}")
+        check("T14 every suggested tag exists in your taxonomy, under its parent", not wrong, "; ".join(wrong[:5]))
+    if r["pending"]:
+        print(f"       (it proposed {', '.join(repr(p['proposed_name']) for p in r['pending'])}: "
+              "now pending in the review queue; reject them there if you don't want them)")
+    warn("T15 a suggestion takes under 10 s", secs < 10, "slow OpenAI responses; users wait for this")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--env-file", type=Path, help="read settings from this file (e.g. the engine's engine.env)")
@@ -443,6 +544,9 @@ def main() -> None:
                    help="seconds to wait for your embedding job to re-embed the edit (default 300; raise it if the job runs less often)")
     f = sub.add_parser("fixtures")
     f.add_argument("output", type=Path, help="your output: {\"showcases\": [{id, fields_json, provider_text, text_hash}], \"gigs\": [{id, match_request}]}")
+    t = sub.add_parser("taxonomy")
+    t.add_argument("--suggest", action="store_true",
+                   help="also make one real suggestion (an OpenAI call; it may add a pending proposal to the review queue)")
     args = ap.parse_args()
     if args.env_file:
         load_env_file(args.env_file)
@@ -455,6 +559,8 @@ def main() -> None:
         check_database(emb, mat, args.sample)
     elif args.cmd == "lifecycle":
         check_lifecycle(mat, args.showcase_id, args.auto, args.edit_wait)
+    elif args.cmd == "taxonomy":
+        check_taxonomy(os.environ.get("TAXONOMY_URL", "http://localhost:8003"), args.suggest)
     else:
         check_fixtures(args.output)
     print(f"\n{counts['PASS']} passed, {counts['WARN']} warnings, {counts['FAIL']} failed")

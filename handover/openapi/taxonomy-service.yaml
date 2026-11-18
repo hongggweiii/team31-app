@@ -1,0 +1,759 @@
+openapi: 3.1.0
+info:
+  title: SenseiGigs taxonomy service (optional)
+  version: 0.1.0
+  description: |
+    AI tag suggestion for gigs and profiles, and the review of terms the
+    SkillsFuture taxonomy doesn't have yet (`../integration-guide.md`, G9-G11).
+    **Optional:** matching works without it.
+
+    Source: `taxonomy-service/app.py`; prompts in `taxonomy-service/prompts/`;
+    longer explanations in `taxonomy-service/README.md`.
+
+    **The life of a new term**
+    1. `POST /suggest` asks OpenAI which taxonomy tags fit a gig's or profile's
+       text. Tags the taxonomy has come back in `tags`, to tick in your picker.
+       Terms it lacks are stored as `pending_review` proposals and returned in
+       `pending`. They are never added to the `sf_*` tables or to anyone's tags yet.
+    2. After the reply, each new proposal is checked for duplicates of existing
+       terms and of other pending ones (`auto_flag`: exact, fuzzy, synonym, none).
+    3. When the form is saved, `POST /proposals/attach` links the proposals to the
+       new gig or profile.
+    4. A reviewer lists them (`GET /proposals`) and approves or rejects each one.
+       Approving adds the term to the taxonomy and tags it onto every gig and
+       profile waiting for it. Rejecting removes it from them and writes a
+       `user_notifications` row for each owner. Pending rows holding the same
+       term (same kind, same parent, same name ignoring case, spacing and
+       trailing punctuation) are decided together.
+
+    **Calling it from your app**
+    - From your server only. It holds your OpenAI key and can change your taxonomy.
+    - Allow about 25 s for `/suggest` (one OpenAI call, capped by
+      `taxonomy.openaiTimeout`, default 20 s). The other endpoints are database
+      calls. On a 503 or a timeout, show "Suggestions are unavailable" and let the
+      user pick tags by hand.
+    - When `taxonomy.serviceToken` is set, every request must send it as the
+      `X-Service-Token` header, or gets 401.
+    - It doesn't know who is calling: your app decides who may approve and reject.
+    - Bind it to a private address; never expose it to the internet.
+servers:
+  - url: http://localhost:8003
+    description: Default local port (`uvicorn app:app --port 8003`)
+security:
+  - {}
+  - serviceToken: []
+paths:
+  /health:
+    get:
+      summary: Service status
+      operationId: health
+      responses:
+        "200":
+          description: The service is up. Check `openai_key` is true and the counts match your `sf_*` tables.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, model, openai_key, categories, specialisations, skills, pending]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+                  model:
+                    type: string
+                    description: The OpenAI model (`taxonomy.openaiModel`).
+                  openai_key:
+                    type: boolean
+                    description: Whether `OPENAI_API_KEY` is set. False means `/suggest` always answers 503.
+                  categories:
+                    type: integer
+                  specialisations:
+                    type: integer
+                  skills:
+                    type: integer
+                  pending:
+                    type: integer
+                    description: Proposals waiting for review.
+              example:
+                status: ok
+                model: gpt-4o-mini
+                openai_key: true
+                categories: 38
+                specialisations: 154
+                skills: 829
+                pending: 3
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /suggest:
+    post:
+      summary: Suggest taxonomy tags for a gig's or profile's text
+      operationId: suggest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuggestRequest"
+            example:
+              title: AML review
+              text: Review our AML compliance framework against MAS Notice 626.
+              owner_type: gig
+              owner_id: null
+              user_id: 10
+      responses:
+        "200":
+          description: |
+            `tags`: what to tick, within the form limits (at most 2 categories, 3
+            specialisations in each, 8 skills under each), most confident kept.
+            `pending`: terms the taxonomy lacks, now stored as proposals; show them
+            as "pending review" and send their ids to `/proposals/attach` when the
+            form is saved. Asking again for the same gig doesn't duplicate them.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [model, tags, pending]
+                properties:
+                  model:
+                    type: string
+                  tags:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SuggestedCategory"
+                  pending:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Proposal"
+              example:
+                model: gpt-4o-mini
+                tags:
+                  - id: 2
+                    name: Financial Services
+                    group: null
+                    specialisations:
+                      - id: 3
+                        name: Regulatory Compliance
+                        search_tag: Regulatory Compliance (Financial Services)
+                        confidence: 0.92
+                        skills:
+                          - {id: 4, name: AML/KYC Program Design}
+                          - {id: 5, name: Regulatory Reporting}
+                pending:
+                  - id: 1
+                    proposed_name: Transaction Monitoring
+                    kind: skill
+                    status: pending_review
+                    submitted_by_source: ai_suggestion
+                    confidence: 0.92
+                    owner_type: gig
+                    owner_id: null
+                    auto_flag: none
+                    category: Financial Services
+                    specialisation: Regulatory Compliance
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          description: OpenAI failed, timed out or no key is set, or the taxonomy is empty. Show the manual picker.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                detail: "AI tag suggestion is unavailable: Request timed out."
+  /lookup:
+    post:
+      summary: Is this name in the taxonomy?
+      operationId: lookup
+      description: |
+        Exact match first (ignoring case, spacing and trailing punctuation), else
+        the closest spelling at least `taxonomy.fuzzySimilarityPct` (85) alike.
+        Never creates anything.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LookupRequest"
+            example:
+              name: Regulatry Reporting
+              kind: skill
+              parent_id: null
+      responses:
+        "200":
+          description: Found (with `match_type` exact or fuzzy) or not.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LookupResult"
+              example:
+                found: true
+                id: 5
+                name: Regulatory Reporting
+                match_type: fuzzy
+                similarity: 95
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /proposals:
+    post:
+      summary: Record a term a user typed into a form
+      operationId: createProposal
+      description: |
+        Looks the name up under its parent first. Found: the existing term is
+        returned and nothing is created. Not found: it becomes a pending proposal
+        (or the existing one for the same gig or user is returned). Not used by
+        team31-app's forms today, which only take AI suggestions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalRequest"
+      responses:
+        "200":
+          description: "`{found: true, match}` or `{found: false, proposal}`."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [found]
+                properties:
+                  found:
+                    type: boolean
+                  match:
+                    $ref: "#/components/schemas/LookupResult"
+                  proposal:
+                    $ref: "#/components/schemas/Proposal"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Invalid body, or the term isn't found and its parent is missing or unknown.
+          content:
+            application/json:
+              schema: {}
+    get:
+      summary: List proposals for the review page
+      operationId: listProposals
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending_review, approved, rejected]
+            default: pending_review
+        - name: owner_type
+          in: query
+          description: With `owner_id`, only one gig's or profile's proposals.
+          schema:
+            type: string
+            enum: [gig, showcase]
+        - name: owner_id
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        "200":
+          description: Pending proposals newest first; reviewed ones most recently reviewed first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [proposals]
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/Proposal"
+                        - type: object
+                          properties:
+                            duplicates:
+                              type: array
+                              items:
+                                type: integer
+                              description: Other pending rows holding the same term, decided together with this one. Empty for reviewed rows.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /proposals/attach:
+    post:
+      summary: Link proposals to the gig or profile that was just saved
+      operationId: attachProposals
+      description: |
+        Call it after saving the form, with the ids `/suggest` returned in
+        `pending`. Only proposals that are still pending and not linked to
+        anything yet are changed. Never fail the save because this call failed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachRequest"
+            example:
+              proposal_ids: [1, 2]
+              owner_type: gig
+              owner_id: 42
+              user_id: 10
+      responses:
+        "200":
+          description: The ids now linked to that gig or profile.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attached]
+                properties:
+                  attached:
+                    type: array
+                    items:
+                      type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /proposals/{proposal_id}/approve:
+    post:
+      summary: Approve a term
+      operationId: approveProposal
+      description: |
+        In one transaction: approves every pending row holding the same term; adds
+        it to the taxonomy (a skill linked under its specialisation, reusing a
+        skill of the same name elsewhere; or a specialisation under its category);
+        and tags it onto every gig and profile that had it pending, within the
+        form limits. After the reply, the service reloads the taxonomy and
+        re-checks the remaining proposals.
+
+        The matcher picks up a **profile's** new tag only when that profile or
+        its embedding next changes (`../integration-guide.md`, G10).
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+            example:
+              admin_user_id: 1
+              reason: null
+      responses:
+        "200":
+          description: "`attached`: the gigs and profiles now tagged; `skipped`: those that couldn't be, with why."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [approved, item, attached, skipped]
+                properties:
+                  approved:
+                    type: array
+                    items:
+                      type: integer
+                  item:
+                    type: object
+                    required: [table, id, name]
+                    properties:
+                      table:
+                        type: string
+                        enum: [sf_skills, sf_specialisations]
+                      id:
+                        type: integer
+                      name:
+                        type: string
+                  attached:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Owner"
+                  skipped:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/Owner"
+                        - type: object
+                          required: [reason]
+                          properties:
+                            reason:
+                              type: string
+                              example: the gig already has 2 categories
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not pending any more (e.g. decided with a duplicate), or its category or specialisation was deleted. Refresh the list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /proposals/{proposal_id}/reject:
+    post:
+      summary: Reject a term
+      operationId: rejectProposal
+      description: |
+        In one transaction: marks every pending row holding the same term
+        `rejected` (with `deleted_at`; rows are kept), which removes it from their
+        gigs and profiles, and writes a `user_notifications` row for each affected
+        user, with the reason and, when the duplicate check found one, an existing
+        term to use instead. Your app shows those notifications.
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+            example:
+              admin_user_id: 1
+              reason: Too specific
+      responses:
+        "200":
+          description: The rows rejected, the gigs and profiles it was removed from, and the users notified.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rejected, detached, notified]
+                properties:
+                  rejected:
+                    type: array
+                    items:
+                      type: integer
+                  detached:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Owner"
+                  notified:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/Owner"
+                        - type: object
+                          required: [user_id]
+                          properties:
+                            user_id:
+                              type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not pending any more. Refresh the list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /refresh:
+    post:
+      summary: Re-read the taxonomy after editing it elsewhere
+      operationId: refresh
+      description: Call it after your app changes the `sf_*` tables directly. Pending proposals are re-checked against the new taxonomy.
+      responses:
+        "200":
+          description: How many proposals are pending, and the taxonomy's size.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pending, categories, specialisations, skills]
+                properties:
+                  pending:
+                    type: integer
+                  categories:
+                    type: integer
+                  specialisations:
+                    type: integer
+                  skills:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+components:
+  securitySchemes:
+    serviceToken:
+      type: apiKey
+      in: header
+      name: X-Service-Token
+      description: Required on every request when `taxonomy.serviceToken` is set.
+  parameters:
+    ProposalId:
+      name: proposal_id
+      in: path
+      required: true
+      schema:
+        type: integer
+  responses:
+    Unauthorized:
+      description: "`taxonomy.serviceToken` is set and the request's `X-Service-Token` is missing or wrong."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: No proposal with that id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationError:
+      description: The request is invalid (FastAPI's standard 422 body).
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: array
+                items:
+                  type: object
+                  required: [loc, msg, type]
+                  properties:
+                    loc:
+                      type: array
+                      items:
+                        oneOf:
+                          - type: string
+                          - type: integer
+                    msg:
+                      type: string
+                    type:
+                      type: string
+  schemas:
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+    SuggestRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 20000
+          description: "A gig: its description and notes. A profile: the text the engine embeds (G1). Refuse empty text before calling."
+        title:
+          type: [string, "null"]
+          description: The gig title (profiles leave it null or send the headline).
+        owner_type:
+          type: [string, "null"]
+          enum: [gig, showcase, null]
+        owner_id:
+          type: [integer, "null"]
+          description: Null while the form isn't saved; link the proposals later with `/proposals/attach`.
+        user_id:
+          type: [integer, "null"]
+          description: Who is notified if one of the proposed terms is rejected.
+    LookupRequest:
+      type: object
+      required: [name, kind]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        kind:
+          type: string
+          enum: [category, specialisation, skill]
+        parent_id:
+          type: [integer, "null"]
+          description: Search only under one category (for a specialisation) or one specialisation (for a skill).
+    LookupResult:
+      type: object
+      required: [found, name]
+      properties:
+        found:
+          type: boolean
+        id:
+          type: integer
+        name:
+          type: string
+          description: The taxonomy's spelling when found; the name asked for when not.
+        match_type:
+          type: string
+          enum: [exact, fuzzy]
+        similarity:
+          type: integer
+          minimum: 0
+          maximum: 100
+    ProposalRequest:
+      type: object
+      required: [name, kind, source]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        kind:
+          type: string
+          enum: [specialisation, skill]
+        category_id:
+          type: [integer, "null"]
+          description: A new specialisation's category.
+        specialisation_id:
+          type: [integer, "null"]
+          description: A new skill's specialisation.
+        source:
+          type: string
+          enum: [hirer, provider]
+        user_id:
+          type: [integer, "null"]
+        owner_type:
+          type: [string, "null"]
+          enum: [gig, showcase, null]
+        owner_id:
+          type: [integer, "null"]
+    AttachRequest:
+      type: object
+      required: [proposal_ids, owner_type, owner_id]
+      properties:
+        proposal_ids:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+        owner_type:
+          type: string
+          enum: [gig, showcase]
+        owner_id:
+          type: integer
+        user_id:
+          type: [integer, "null"]
+    ReviewRequest:
+      type: object
+      properties:
+        admin_user_id:
+          type: [integer, "null"]
+          description: The reviewer, recorded on the rows.
+        reason:
+          type: [string, "null"]
+          maxLength: 2000
+          description: Recorded, and included in the owners' message on a rejection.
+    SuggestedCategory:
+      type: object
+      required: [id, name, specialisations]
+      properties:
+        id:
+          type: integer
+          description: "`sf_categories.id`"
+        name:
+          type: string
+        group:
+          type: [string, "null"]
+        specialisations:
+          type: array
+          items:
+            type: object
+            required: [id, name, search_tag, confidence, skills]
+            properties:
+              id:
+                type: integer
+                description: "`sf_specialisations.id`"
+              name:
+                type: string
+              search_tag:
+                type: string
+              confidence:
+                type: number
+                minimum: 0
+                maximum: 1
+              skills:
+                type: array
+                items:
+                  type: object
+                  required: [id, name]
+                  properties:
+                    id:
+                      type: integer
+                      description: "`sf_skills.id`, linked to this specialisation"
+                    name:
+                      type: string
+    Proposal:
+      type: object
+      description: A `taxonomy_proposals` row (see `../sql/<variant>/05_taxonomy_review.sql`), plus its category's and specialisation's names. Dates are "YYYY-MM-DD HH:MM:SS" in UTC.
+      required: [id, proposed_name, kind, status, submitted_by_source, auto_flag]
+      properties:
+        id:
+          type: integer
+        proposed_name:
+          type: string
+        kind:
+          type: string
+          enum: [specialisation, skill]
+        category_id:
+          type: [integer, "null"]
+        specialisation_id:
+          type: [integer, "null"]
+        category:
+          type: [string, "null"]
+        specialisation:
+          type: [string, "null"]
+        status:
+          type: string
+          enum: [pending_review, approved, rejected]
+        submitted_by_source:
+          type: string
+          enum: [ai_suggestion, hirer, provider]
+        submitted_by_user:
+          type: [integer, "null"]
+        confidence:
+          type: [number, "null"]
+        model:
+          type: [string, "null"]
+        owner_type:
+          type: [string, "null"]
+          enum: [gig, showcase, null]
+        owner_id:
+          type: [integer, "null"]
+        auto_flag:
+          type: string
+          enum: [none, exact, fuzzy, synonym]
+          description: The duplicate check's verdict, filled in shortly after the proposal is made.
+        closest_match_table:
+          type: [string, "null"]
+          enum: [sf_skills, sf_specialisations, taxonomy_proposals, null]
+        closest_match_id:
+          type: [integer, "null"]
+        closest_match_name:
+          type: [string, "null"]
+        similarity_score:
+          type: [integer, "null"]
+        approved_item_id:
+          type: [integer, "null"]
+        admin_user_id:
+          type: [integer, "null"]
+        admin_reason:
+          type: [string, "null"]
+        created_at:
+          type: [string, "null"]
+        actioned_at:
+          type: [string, "null"]
+        deleted_at:
+          type: [string, "null"]
+    Owner:
+      type: object
+      required: [proposal_id, owner_type, owner_id]
+      properties:
+        proposal_id:
+          type: integer
+        owner_type:
+          type: [string, "null"]
+          enum: [gig, showcase, null]
+        owner_id:
+          type: [integer, "null"]

@@ -8,7 +8,8 @@ These checks tell you whether **your integration** of the recommendation engine 
 | `check.py database` | Your tables are right, and the rows your app wrote are what the engine expects | Automated, read-only |
 | `check.py lifecycle` | Editing, unpublishing and republishing a profile **in your app** reach the engine | Interactive: it tells you what to do in your app and watches. Staging only |
 | `check.py fixtures` | Your code builds the same profile text, hashes and match requests as ours | Automated comparison with `fixtures/` |
-| `test-cases.csv` | Everything above, plus the checks in your own app (pages, errors, latency). IDs start with `TC-`; its "Automated by" column names the `check.py` checks (E, M, D, L numbers) that cover a case | Manual checklist for QA |
+| `check.py taxonomy` | Only with the optional taxonomy-service: it runs, is protected by its token, sees your taxonomy, and its answers match `../openapi/taxonomy-service.yaml` | Automated, read-only; `--suggest` adds one real OpenAI call |
+| `test-cases.csv` | Everything above, plus the checks in your own app (pages, errors, latency). IDs start with `TC-`; its "Automated by" column names the `check.py` checks (E, M, D, L, T numbers) that cover a case | Manual checklist for QA |
 
 Run everything against a **staging copy** of your database, never production. `../integration-steps.md` says which checks must pass at each step. Early on, some fail simply because a later step isn't done yet.
 
@@ -20,7 +21,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt    # Python 3
 .venv/bin/python check.py --env-file ../../engine.env services
 ```
 
-`--env-file` reads the engine's own `engine.env`: the database settings and the embedding-service address. Add `MATCHER_URL` and `CHECK_GIG_ID` to it if they differ from the defaults. Environment variables (`EMBEDDING_URL`, `MATCHER_URL`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CHECK_GIG_ID`) win over the file. Use them to point the checks at another address, or at a read-only database user.
+`--env-file` reads the engine's own `engine.env`: the database settings and the embedding-service address. Add `MATCHER_URL` and `CHECK_GIG_ID` to it if they differ from the defaults. Environment variables (`EMBEDDING_URL`, `MATCHER_URL`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CHECK_GIG_ID`, `TAXONOMY_URL`, `TAXONOMY_TOKEN`) win over the file. Use them to point the checks at another address, or at a read-only database user.
 
 Each run prints `PASS`, `WARN` or `FAIL` per check, with the reason for anything that isn't a pass, and exits non-zero if anything failed. A `WARN` is allowed but should be read. For example: "3 published profiles have no embedding yet".
 
@@ -31,7 +32,7 @@ Each run prints `PASS`, `WARN` or `FAIL` per check, with the reason for anything
 - ranks, scores and `catalogue_size` are consistent;
 - `top_k` limits are enforced, and invalid requests get 422;
 - parallel requests queue and all succeed;
-- the gig vector is saved after a match. This is skipped while the catalogue is empty, because with nothing to rank the matcher doesn't embed the gig.
+- the gig vector is saved after a match (M14), and a second match of the same gig reuses it instead of calling embedding-service (M15). Both need `CHECK_GIG_ID`, and are skipped while the catalogue is empty, because with nothing to rank the matcher doesn't embed the gig.
 
 **`database`:**
 - MariaDB version, tables, and matching id types (`../sql/README.md`);
@@ -49,6 +50,14 @@ Each run prints `PASS`, `WARN` or `FAIL` per check, with the reason for anything
 3. publish it again. It checks it comes back (L3).
 
 Because you act through your own screens, this tests your real G2 and G3 code. It catches the problems that are otherwise silent: an edit that doesn't bump `updated_at`, a job on the wrong clock, an unpublish the `showcases` view doesn't see. `--auto` does steps 2-3 by writing `showcases.status` directly, for setups where that is a real column; it can't with the adapter views.
+
+**`taxonomy [--suggest]`** (optional service only; run with `--env-file ../../taxonomy.env`, which gives it the service's token and database):
+- the service is up, has an OpenAI key (T2), and refuses calls without its token (T3);
+- its taxonomy is the one in your `sf_*` tables (T4), and `/lookup` finds names in any case, with a typo, and not at all (T5-T7);
+- the review queue's rows match the spec (T8), and the tables and `user_id` columns it needs exist (T9-T10);
+- `--suggest` makes one real suggestion for a sample gig and checks it: within the form limits, and every tag exists under its parent in your taxonomy (T11-T15). It may add a pending proposal to your review queue; reject it there.
+
+`taxonomy-service/check_service.py` is the service's own test suite. It tests every endpoint on a throwaway SQLite database with OpenAI faked, so it needs neither your database nor a key. Run it after installing.
 
 **`fixtures OUTPUT.json`:** see the next section.
 

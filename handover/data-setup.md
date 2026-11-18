@@ -14,7 +14,7 @@ Run the scripts in `sql/` (`sql/README.md`). If your profile and gig tables have
 >
 > This section will then give the files and the import steps.
 
-Whichever version ships, load it once, before any gig or showcase is tagged. Don't edit the `sf_*` rows afterwards without re-checking tagged data: renaming or deleting an item changes or removes the tags that point at it (the foreign keys cascade).
+Whichever version ships, load it once, before any gig or showcase is tagged. Don't edit the `sf_*` rows afterwards without re-checking tagged data: renaming or deleting an item changes or removes the tags that point at it (the foreign keys cascade). Adding terms is safe: that is all the optional term review does (`integration-guide.md`, G10). When the skill list grows, the matcher builds a new skill-vector cache at its next catalogue reload (after the next profile change), so that one reload takes longer.
 
 ## 3. Tag your existing gigs and showcases
 

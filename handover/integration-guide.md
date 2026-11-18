@@ -1,6 +1,6 @@
 # Integration guide: the code your app writes
 
-You run our two Python services as they are (`embedding-service/` and `matcher/`). Your app only has to connect to them. That connecting code, the **glue**, is listed below. Every item is something team31-app does today; our version is in `reference/` (CodeIgniter 4, for reading).
+You run our Python services as they are (`embedding-service/` and `matcher/`, and optionally `taxonomy-service/`). Your app only has to connect to them. That connecting code, the **glue**, is listed below. Every item is something team31-app does today; our version is in `reference/` (CodeIgniter 4, for reading).
 
 The glue's mistakes don't raise errors. If your profile text is built slightly differently, or a profile edit is never re-embedded, everything keeps working, but matches get quietly worse. That is why each item has exact rules, and why `testing/check.py` checks your output against ours.
 
@@ -15,6 +15,17 @@ The glue's mistakes don't raise errors. If your profile text is built slightly d
 | G5 | Build the `/match` request for a gig, including its taxonomy array | When showing a gig's matches | `Libraries/MatcherClient.php` (`gigRequest()`), `Libraries/Taxonomy.php` (`tags()`) |
 | G6 | Show the results, and handle every outcome without an error page | Same | `Libraries/MatcherClient.php` (`match()`), `Libraries/MatcherException.php`, `Controllers/Gigs.php` (`matches()`), `Views/gig-matches.php` |
 | G7 | Configure the two service URLs and timeouts | Once | `Config/Embedding.php`, `Config/Matcher.php` |
+
+**Optional.** Matching works without these. Build them only if you want what they give:
+
+| # | Glue | When it runs | Our reference (in `reference/app/`) |
+|---|---|---|---|
+| G8 | Record each match and show a matcher dashboard | After a matches page is sent; an admin page | `Libraries/MatchRecorder.php`, `Controllers/Dashboard.php`, `Views/dashboard.php` |
+| G9 | "Suggest tags with AI" on your gig and profile forms | When a user clicks it; when the form is saved | `Controllers/TagSuggestions.php`, `Libraries/TaxonomyClient.php`, `Controllers/BaseController.php` (`attachSuggestedTerms()`), `Views/partials/taxonomy-picker.php` |
+| G10 | A review page for new taxonomy terms, for reviewers only | A reviewer's page | `Controllers/TaxonomyDashboard.php`, `Views/taxonomy-dashboard/` (but add a role check: ours has none) |
+| G11 | Show users the notifications a rejected term leaves them | Wherever your users see messages | — (our app writes them but doesn't show them yet) |
+
+G9-G11 need the third, optional service, `taxonomy-service/`. It doesn't know about users or roles: your app enforces who may do what ("Roles for G9-G11", below).
 
 The database tables come from `sql/`. The services' exact request and response formats are in `openapi/`. `integration-steps.md` puts all of this in order.
 
@@ -183,7 +194,7 @@ The matcher reads profiles' tags straight from these tables. Gigs' tags travel i
 
 | Field | Value |
 |---|---|
-| `hire_id` | The gig's id (integer). The matcher saves the gig's vector under it in `gig_embeddings` |
+| `hire_id` | The gig's id (integer), stable for the gig's lifetime. The matcher saves the gig's vector under it in `gig_embeddings`, and reuses it the next time this gig is matched with the same title and description |
 | `hire_title` | The gig title, trimmed |
 | `hire_description` | The gig's main description as plain text, trimmed (below) |
 | `industry` | `null`; the current model doesn't use it |
@@ -225,9 +236,11 @@ Call `/match` **from your server**, never from the browser: the services are pri
 - `score` is 0-100 **within this gig** (rank 1 is always 100). Don't present it as a percentage match, and don't compare it across gigs.
 - `signals.taxonomy.tag_level` can label why a result matched: 1 shared category, 2 shared specialisation, 3 shared specialisation and skill.
 
-**Capacity.** The matcher processes one request at a time, about 14 per second in our tests; the rest queue. With a 5-second timeout, a burst of more than about 70 simultaneous match requests makes the last ones time out ("unavailable").
-- Our page re-runs the match on every visit, so new profiles appear on refresh.
-- If you expect more traffic, cache each gig's results for a few minutes. Or run a second matcher instance behind a load balancer: each instance holds the whole catalogue in memory.
+**Capacity.** The matcher processes one request at a time, about 10-14 per second in our tests; the rest queue. With a 5-second timeout, a burst of more than about 70 simultaneous match requests makes the last ones time out ("unavailable").
+- Our page re-runs the match on every visit, so new profiles appear on refresh. A revisit reuses the gig's saved vector, so it skips embedding-service (`meta.gig_vector` is `stored`).
+- If you expect more traffic, cache each gig's results for a few minutes. Or run more matcher processes (`--workers N`, or instances behind a load balancer): each holds the whole catalogue in memory, about 450 MB per process (`deployment-and-operations.md`).
+
+`meta.timing_ms` and `meta.machine` say where the matcher's time went. You don't need them to show results; G8 saves them for monitoring.
 
 ## G7. Configuration in your app
 
@@ -242,3 +255,127 @@ Your app needs only the two service addresses and timeouts. Put them wherever yo
 | Results per gig (`top_k`) | 10 | 1-50 |
 
 The services' own settings (database, device) are separate: see `engine.env.example` and `deployment-and-operations.md`.
+
+If you build G9-G11, add the taxonomy-service address (ours: `http://localhost:8003/`), a timeout of about 25 s (a suggestion is an OpenAI call; keep it above `taxonomy.openaiTimeout` and under your PHP `max_execution_time`), and the service token (`taxonomy.serviceToken`), sent as the `X-Service-Token` header on every call. Our values are in `reference/app/Config/Taxonomy.php`.
+
+---
+
+## Optional glue
+
+## G8. Recording matches and the matcher dashboard
+
+**What it gives you:** a record of every match your site runs (whether it worked, how long each stage took, and what it returned), and an admin page that summarises the latest runs. We use ours to watch latency and to see how often the top results share the gig's tags.
+
+**Tables:** `sql/<variant>/04_run_records.sql` creates `analytics_outputs` (one row per match) and `run_outputs` (one row per result). Only your app writes and reads them.
+
+**What to save, per `/match` call** (our `MatchRecorder::record()`, called from `Gigs::matches()`):
+
+| Column(s) | From |
+|---|---|
+| `gig_id`, `user_id` | The gig, and its owner |
+| `status`, `error` | `ok`, or `error` with the failure's message (any outcome in G6's "unavailable" rows) |
+| `matcher_machine`, `candidate_pool`, `returned` | `meta.machine`, `meta.candidate_pool`, `meta.returned` |
+| `matcher_vector_read_ms` … `matcher_total_ms` | `meta.timing_ms`: `vector_read`, `embed`, `candidates`, `score`, `response`, `total`. `embed` is null when the gig's stored vector was reused |
+| `matcher_call_ms` | Your own timing of the HTTP call to `/match`. Minus `matcher_total_ms`, it is the network and queueing time |
+| `save_*`, `db_*`, `php_views_ms`, `page_total_ms`, `action_*` | Your app's own timings of the request that saved the gig and of the matches page, if you measure them (we do, with a development-only request timer). Leave them NULL otherwise |
+| `run_outputs`: one row per result | `rank`, `provider_id`, `score`, `raw_margin`, `provider.display_title` / `industry` / `bio_excerpt`, and each value of `signals.retrieval`, `signals.business_fit` and `signals.taxonomy` in the column of the same name |
+
+**Rules:**
+- **Never slow the page or break it.** Write the rows after the response has been sent (we use a PHP shutdown function; a queued job works too), and catch and log any failure. A recording problem must never turn a match into an error page.
+- **Record failures too**, with `status = 'error'`. They are what the dashboard is for.
+- A revisit of the matches page is a new run, with no save request (`action_total_ms` NULL).
+- **Size:** about 11 rows per match with `top_k` 10. Decide how long to keep them, for example by deleting runs older than 90 days.
+
+**The dashboard page** (ours: `/admin/dashboard`, `Controllers/Dashboard.php`, `Views/dashboard.php`) reads the latest 50 runs:
+- typical (median) and slowest (95th percentile) time from Submit to matches, matching time and gig-embedding time;
+- how many runs succeeded and failed;
+- a paged table of runs, each with its top results and a bar of where its time went;
+- how often results share a category, specialisation or skill with the gig (`tag_level`), for rank 1 and for all results.
+
+**Put it behind your admin login.** Ours needs Shield's `admin.access` permission. It shows gig titles and profiles' details.
+
+## Roles for G9-G11: your app decides who may do what
+
+taxonomy-service has no idea of users or roles. It trusts whatever your server sends, and its token (`taxonomy.serviceToken`) only proves that the caller is your server, not which user is behind it. Every permission below is therefore **checked by your app** before it calls the service, with whatever roles your app already has (for example an admin or moderator role):
+
+| Action | Who may do it | Calls |
+|---|---|---|
+| "Suggest tags with AI" on a gig or profile form | Any logged-in user who may edit that gig or profile | `POST /suggest`, `POST /proposals/attach` |
+| See the review page and its list of terms | **Reviewers only** (admins or moderators) | `GET /proposals` |
+| Approve or reject a term | **Reviewers only** | `POST /proposals/{id}/approve`, `.../reject` |
+| Add, rename or remove taxonomy terms | **Reviewers only** | your own SQL, then `POST /refresh` |
+| Read a notification, mark it read | **Only the user it is addressed to** | your own SQL on `user_notifications` (G11) |
+
+Send the real user's id as `user_id` (G9) and the reviewer's id as `admin_user_id` (G10), so the records say who did what. Never take these ids from the request body: use your session.
+
+**Our reference app is not a model for this.** In team31-app, `/taxonomy-dashboard` only requires a login (`reference/app/Controllers/TaxonomyDashboard.php` says "no role is checked"); only our matcher dashboard (G8) checks a role (Shield's `admin.access` permission, in our `Config/Routes.php`). Apply a reviewer check to every review route in your app.
+
+## G9. AI tag suggestion on the forms
+
+**What it gives you:** a "Suggest tags with AI" button in the SkillsFuture picker. It reads what the user has typed so far and ticks the tags that fit. Terms the taxonomy doesn't have are shown as "pending review" and held for a reviewer (G10), rather than added straight away.
+
+**Needs:** `taxonomy-service/` running (`deployment-and-operations.md`) with an OpenAI key, and `sql/<variant>/05_taxonomy_review.sql`.
+
+**The flow** (`openapi/taxonomy-service.yaml` has every field):
+1. **The user clicks the button.** Your page posts the form as filled in so far to **your server** (ours: `POST /tag-suggestions`, `TagSuggestions::suggest()`). Never call taxonomy-service from the browser: it holds your OpenAI key and can change your taxonomy.
+2. **Your server calls `POST /suggest`** with `owner_type` (`gig` or `showcase`), `owner_id` null (the form isn't saved yet), `user_id` (the user), `title`, and `text`:
+   - a gig: its description and notes, joined with a line break, with the gig title as `title`;
+   - a profile: the same text the engine embeds (G1's `providerText()` of the form's headline, bio, services and achievements).
+
+   Refuse an empty `text` yourself, with a message such as "Write the gig description first".
+3. **Show the answer.** Tick each tag in `tags` (category, then its specialisations, then their skills) in your picker, within the form limits (G4). The service already keeps to them. For each entry in `pending`, show its name marked "pending review", and add its `id` to the form as a hidden field (ours: `proposals[]`).
+4. **On save,** after the gig or profile has its id, call `POST /proposals/attach` with those ids, `owner_type`, `owner_id` and `user_id` (our `BaseController::attachSuggestedTerms()`). That links the pending terms to it, so an approval can tag it and a rejection can tell its owner. **Never fail the save** because this call failed: log it.
+5. **On any error** (503, timeout, connection error): show "Suggestions are unavailable right now" and leave the picker as it is. The user picks tags by hand, as without G9.
+
+**What users must know:** the button sends what they typed to OpenAI (`deployment-and-operations.md`, "Decisions and limits"). Say so near the button, or in your privacy notice.
+
+**Pending terms are never tags.** They live only in `taxonomy_proposals` until a reviewer approves them, so the matcher never sees them. The ticked tags are saved through your normal G4 code.
+
+## G10. Reviewing new terms
+
+**What it gives you:** a page where a reviewer approves or rejects the terms G9 proposed. Approving adds the term to the taxonomy and tags it onto every gig and profile that was waiting for it. Rejecting removes it from them and records a message for each owner.
+
+**The page** (ours: `/taxonomy-dashboard`, `Controllers/TaxonomyDashboard.php`, `Views/taxonomy-dashboard/proposals.php`):
+- **List** with `GET /proposals?status=pending_review` (or `approved`, `rejected`). Each row has its term, kind (specialisation or skill), category and specialisation, the AI's confidence, and a duplicate flag (`auto_flag`: `exact`, `fuzzy`, `synonym` or `none`, with `closest_match_name`). Show the flag: it is the reviewer's main clue that the term already exists under another name.
+- **Approve** with `POST /proposals/{id}/approve` and `admin_user_id`. Rows holding the same term are decided together. Show `skipped`: gigs or profiles that couldn't take the term because they were already at a form limit.
+- **Reject** with `POST /proposals/{id}/reject`, `admin_user_id` and an optional `reason` (it goes into the owner's message).
+- A **409** means the row was already decided (for example together with a duplicate): refresh the list rather than showing an error.
+- **After approving,** clear any cache your app keeps of the taxonomy (ours: `Taxonomy::forgetTree()`), so your picker shows the new term.
+
+**Restrict the page to reviewers.** Check your reviewer role on the page **and on every action it posts** (approve, reject, taxonomy edits), not only on the menu link (see "Roles for G9-G11" above). An ordinary user who reaches these actions can change your taxonomy and other users' tags.
+
+**Rejections notify users.** Each rejection writes a message for the affected users. Showing those messages is G11.
+
+**Editing the taxonomy elsewhere.** Our dashboard also lets a reviewer add, rename and remove taxonomy terms directly (`Views/taxonomy-dashboard/taxonomy.php`, `Libraries/Taxonomy.php`). If you change the `sf_*` tables outside taxonomy-service, call `POST /refresh` afterwards, so pending terms are re-checked against the new taxonomy. Renaming or removing a term changes or removes the tags that use it (`data-setup.md`, step 2).
+
+**Approved terms reach the matcher late for profiles.** The matcher reloads profiles' tags only when a profile or its embedding changes (`updated_at`). So a profile that was tagged by an approval is matched with its new tag after its next edit or embedding, or after a matcher restart. To apply approvals at once, bump the affected profiles' `updated_at` (the approve response lists them in `attached`). Gigs aren't affected: their tags are sent with each match.
+
+**Check it:** `testing/check.py taxonomy`, and `test-cases.csv` area **Taxonomy** (TC-G).
+
+## G11. Showing users their notifications
+
+**What it is:** when a reviewer rejects a term (G10), taxonomy-service writes one row to `user_notifications` for each gig or profile that had that term pending. The row tells the user that the term was removed from their gig or profile, why, and what to use instead. **The service only writes the rows. Your app must show them.** Without G11, users never learn why a tag they saw as "pending review" disappeared.
+
+**Our app doesn't show them yet.** team31-app writes these rows but has no notification screen. So there is no reference code for this item; the table and the rules below are the whole contract.
+
+**The table** (`sql/<variant>/05_taxonomy_review.sql`):
+
+| Column | Holds |
+|---|---|
+| `user_id` | Who it is for: the user your app sent as `user_id` to `/suggest` or `/proposals/attach`; failing that, the gig's or profile's owner (`gigs.user_id` / `showcases.user_id`) |
+| `type` | `taxonomy_proposal_rejected` (the only type today) |
+| `message` | Ready to show, for example: `The specialisation "Crypto Custody" was not added to the taxonomy, so it has been removed from your gig #42. Reason: Too specific` (when the duplicate check found an existing term, it ends with `You can use "<term>" instead.`) |
+| `data` | JSON with the details, if you want to build your own wording or a link: `proposal_id`, `owner_type` (`gig` / `showcase`), `owner_id`, `name`, `kind` (`skill` / `specialisation`), `reason` |
+| `read_at` | NULL until your app marks it read |
+| `created_at` | When it was rejected (UTC) |
+
+**What to build:**
+1. **Show unread messages** to the logged-in user, for example as a badge and a list in their account area or on the gig or profile page: `SELECT ... FROM user_notifications WHERE user_id = :me AND read_at IS NULL ORDER BY created_at DESC`.
+2. **Mark them read** when shown or dismissed: `UPDATE user_notifications SET read_at = :now WHERE id = :id AND user_id = :me`.
+3. **Only ever show a user their own rows**: always filter by the session's user id, never by an id from the request.
+4. **Optionally, link** to the gig or profile in `data.owner_type` / `data.owner_id`, so the user can pick another tag there.
+5. **Optionally, send an email** for each new row, with your existing mail system. The service sends nothing itself.
+
+`message` is plain text written from the term and the reviewer's reason: escape it like any user content when you show it.
+
+**Check it:** `test-cases.csv` TC-G10 and TC-G13.

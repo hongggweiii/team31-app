@@ -23,7 +23,7 @@ You need the ranker repo for only three things:
 
 1. **Parity checks:** confirming the services still reproduce the ranker exactly (`matcher/check_parity.py`).
 2. **Upgrades:** taking a newer model or pipeline from the Data team.
-3. **The taxonomy and reference data:** the source of the `sf_v1` taxonomy (the seed for your database is pending; see `data-setup.md`).
+3. **The taxonomy and reference data:** the `sf_v1`-tagged records the taxonomy seed comes from (the seed for your database is pending; see `data-setup.md`). The records themselves, and the full SkillsFuture framework they were tagged from, were generated in the data generation repo (`data-generation.md`).
 
 ## Where to put it
 

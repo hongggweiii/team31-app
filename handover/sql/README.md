@@ -7,6 +7,10 @@ The scripts run on your MariaDB database. Use **MariaDB 11.7 or later**; we run 
 | `01_taxonomy.sql` | `sf_categories`, `sf_specialisations`, `sf_skills`, `sf_specialisation_skills` | the taxonomy seed, once (pending; see `../data-setup.md`) | your forms, the matcher |
 | `<variant>/02_tag_links.sql` | `showcase_specialisations`, `showcase_skills`, `gig_specialisations`, `gig_skills` | your app, when a gig or profile is saved | the matcher (profiles); your app (gigs, for the `/match` request) |
 | `<variant>/03_embeddings.sql` | `showcase_embeddings`, `gig_embeddings` | your app (profiles); the matcher (gigs) | the matcher |
+| `<variant>/04_run_records.sql` (**optional**, G8) | `analytics_outputs`, `run_outputs` | your app, after each match | your matcher dashboard |
+| `<variant>/05_taxonomy_review.sql` (**optional**, G9-G11) | `taxonomy_proposals`, `user_notifications` | taxonomy-service | taxonomy-service; your app (notifications) |
+
+Scripts 01-03 are what matching needs. Run 04 and 05 only if you build the optional glue they belong to (`../integration-guide.md`, "Optional glue").
 
 Our names: a **showcase** is a provider's profile, and a **gig** is a hirer's job post. Yours may be called something else; Step 1 deals with that.
 
@@ -20,6 +24,7 @@ The matcher reads your profiles table directly, and scripts 02 and 03 add foreig
 | `showcases` | `status` | Only rows with `status = 'published'` are matched |
 | `showcases` | `updated_at` | Must change whenever a profile is published, unpublished or edited. The matcher checks it every 30 s to know when to reload |
 | `gigs` | `id` | The `hire_id` you send to `/match`. `gig_embeddings` stores it. Same type as `showcases.id` |
+| `showcases`, `gigs` | `user_id` | **Only with taxonomy-service** (script 05): the owner it notifies when a pending term is rejected |
 
 **If your tables already look like this,** skip to Step 2 and leave the scripts as they are.
 
@@ -37,9 +42,11 @@ The matcher reads your profiles table directly, and scripts 02 and 03 add foreig
    CREATE VIEW gigs AS SELECT id FROM jobs;
    ```
 
+   If you deploy taxonomy-service, add the owner's id to both views (`profiles.user_id AS user_id`, and the same for `jobs`). It reads them when it rejects a term. Its writes go to the tag tables, never to these views.
+
    The `COALESCE`s matter. In MariaDB, `GREATEST()` returns NULL if any argument is NULL, and older rows often have no `updated_at`. `updated_at` must change whenever the `status` the view computes changes. In this example, soft-deleting sets `deleted_at`, and the view's `updated_at` picks that up. If a profile can also be hidden by a change elsewhere (for example, its user being suspended), that change must bump the profile's `updated_at`, or the view must include that table's timestamp too.
 
-2. In your copies of scripts 02 and 03, change every `REFERENCES \`showcases\` (\`id\`)` to your **real** profile table and every `REFERENCES \`gigs\` (\`id\`)` to your real gig table. Foreign keys can't point at views. Deleting a real profile or gig then still removes its tags and embedding.
+2. In your copies of scripts 02, 03 and 04, change every `REFERENCES \`showcases\` (\`id\`)` to your **real** profile table and every `REFERENCES \`gigs\` (\`id\`)` to your real gig table. Foreign keys can't point at views. Deleting a real profile or gig then still removes its tags and embedding.
 
 We tested this with a Laravel-style schema: `profiles` with `BIGINT UNSIGNED` ids, `is_published`, soft deletes, and `jobs`. The matcher, the checks and the cascades all worked unchanged.
 
@@ -65,7 +72,11 @@ WHERE table_schema = DATABASE() AND column_name = 'id'
 mysql -h <host> -u <user> -p <database> < 01_taxonomy.sql
 mysql -h <host> -u <user> -p <database> < int-unsigned/02_tag_links.sql    # or bigint-unsigned/, or your edited copy
 mysql -h <host> -u <user> -p <database> < int-unsigned/03_embeddings.sql
+mysql -h <host> -u <user> -p <database> < int-unsigned/04_run_records.sql      # optional: G8
+mysql -h <host> -u <user> -p <database> < int-unsigned/05_taxonomy_review.sql  # optional: taxonomy-service
 ```
+
+In script 05, the user, gig and showcase id columns take your id type, but carry no foreign keys. Its only foreign keys point at the `sf_*` tables, so it needs no `REFERENCES` edits.
 
 If you manage your schema with migrations (Laravel, Phinx, ...), put each script's statements in a migration as raw SQL (for example `DB::statement(...)`). Schema builders generally can't express MariaDB's `VECTOR` column and `VECTOR KEY`.
 
@@ -82,6 +93,7 @@ The text the matcher ranks does **not** come from your profile columns. It comes
 SELECT VERSION();
 
 -- the 10 tables exist, plus your showcases / gigs (tables or views)
+-- (add 'analytics_outputs','run_outputs','taxonomy_proposals','user_notifications' if you ran 04 / 05)
 SELECT table_name, table_type FROM information_schema.tables
 WHERE table_schema = DATABASE()
   AND table_name IN ('sf_categories','sf_specialisations','sf_skills','sf_specialisation_skills',

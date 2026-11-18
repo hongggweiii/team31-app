@@ -4,12 +4,16 @@
 #
 #     handover/make-package.sh [output.zip]
 #
+# Build from a clean, committed checkout: the services are taken from the working
+# tree (every file git doesn't ignore), so uncommitted changes would ship too.
+#
 # Layout of the zip:
 #     senseigigz-engine/
 #       README.md            points to handover/README.md
 #       handover/            these docs, sql/, openapi/, testing/
 #       embedding-service/   the service: files git doesn't ignore (no .venv, caches)
 #       matcher/             the service and its pinned ranker copy, likewise
+#       taxonomy-service/    the optional third service, likewise
 #       reference/           team31-app's PHP that the integration guide cites
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,7 +24,7 @@ cd "$ROOT"
 
 # The services: every file git doesn't ignore (tracked or new), from the working tree,
 # so .venv/, caches and __pycache__ stay out.
-git ls-files -z --cached --others --exclude-standard embedding-service matcher | rsync -a --from0 --files-from=- ./ "$STAGE/"
+git ls-files -z --cached --others --exclude-standard embedding-service matcher taxonomy-service | rsync -a --from0 --files-from=- ./ "$STAGE/"
 
 # The docs (MakeFixturesTest.php needs team31-app to run, but is kept so they can see how the fixtures were made).
 rsync -a --exclude make-package.sh --exclude .DS_Store --exclude .venv --exclude __pycache__ --exclude 'fixtures_output.json' handover/ "$STAGE/handover/"
@@ -31,7 +35,13 @@ for f in app/Libraries/ProviderEmbedder.php app/Libraries/EmbeddingStore.php app
          app/Commands/EmbedAuto.php app/Commands/EmbedBatch.php \
          app/Controllers/Gigs.php app/Models/GigModel.php \
          app/Views/gig-matches.php app/Views/partials/taxonomy-picker.php \
-         app/Config/Embedding.php app/Config/Matcher.php; do
+         app/Config/Embedding.php app/Config/Matcher.php \
+         app/Libraries/MatchRecorder.php app/Libraries/RequestTimer.php \
+         app/Controllers/Dashboard.php app/Views/dashboard.php \
+         app/Controllers/TagSuggestions.php app/Controllers/BaseController.php app/Libraries/TaxonomyClient.php \
+         app/Controllers/TaxonomyDashboard.php app/Views/taxonomy-dashboard/header.php \
+         app/Views/taxonomy-dashboard/proposals.php app/Views/taxonomy-dashboard/taxonomy.php \
+         app/Config/Taxonomy.php app/Config/Routes.php; do
   mkdir -p "$STAGE/reference/$(dirname "$f")"
   cp "$f" "$STAGE/reference/$f"
 done
@@ -42,6 +52,7 @@ cat > "$STAGE/README.md" <<'EOF'
 Start with handover/README.md, then follow handover/integration-steps.md.
 
 - embedding-service/, matcher/  the two services you run (see handover/deployment-and-operations.md)
+- taxonomy-service/             optional: AI tag suggestion and term review (integration-guide.md, G9-G11)
 - handover/                     the documentation, SQL, API specs and tests
 - reference/                    team31-app's PHP (CodeIgniter 4) that the docs cite, for reading only
 EOF
